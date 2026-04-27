@@ -5,8 +5,10 @@ namespace App\AI\Messaging\Telegram;
 use App\AI\Agent\BaseAgent;
 use App\AI\Orchestration\Orchestrator;
 use App\AI\Provider\AiMessage;
+use App\AI\Provider\AiRoleEnum;
 use App\AI\Provider\AiSession;
 use App\AI\Provider\BaseProvider;
+use RuntimeException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -14,6 +16,7 @@ class TelegramService
 {
     private const BASE_URL = 'https://api.telegram.org';
     private const TELEGRAM_TEXT_LIMIT = 4096;
+    private const THINKING_TEXT = 'thinking...';
 
     public function __construct(
         private string $botToken,
@@ -25,7 +28,7 @@ class TelegramService
         private int $historyLimit = 30,
     ) {}
 
-    public function setWebhook(string $url, array $allowedUpdates = ['message', 'callback_query']): array
+    public function setWebhook(string $url, array $allowedUpdates = ['message', 'edited_message', 'callback_query']): array
     {
         $payload = [
             'url' => $url,
@@ -69,6 +72,25 @@ class TelegramService
         ]);
     }
 
+    public function editMessageText(int|string $chatId, int $messageId, string $text, array $extra = []): array
+    {
+        $text = $this->truncateForTelegram($text);
+
+        return $this->call('editMessageText', array_merge([
+            'chat_id' => $chatId,
+            'message_id' => $messageId,
+            'text' => $text,
+        ], $extra));
+    }
+
+    public function deleteMessage(int|string $chatId, int $messageId): array
+    {
+        return $this->call('deleteMessage', [
+            'chat_id' => $chatId,
+            'message_id' => $messageId,
+        ]);
+    }
+
     public function handleUpdate(array $update): void
     {
         Log::info('telegram.update', ['update_id' => $update['update_id'] ?? null]);
@@ -80,34 +102,23 @@ class TelegramService
 
         $chatId = $message['chat']['id'] ?? null;
         $text = $message['text'] ?? null;
+        $incomingMessageId = isset($message['message_id']) ? (int) $message['message_id'] : null;
+        $replyToMessageId = isset($message['reply_to_message']['message_id']) ? (int) $message['reply_to_message']['message_id'] : null;
+        $isEditedMessage = isset($update['edited_message']);
 
-        if ($chatId === null || !is_string($text) || trim($text) === '') {
+        if ($chatId === null || !is_string($text) || trim($text) === '' || $incomingMessageId === null) {
             return;
         }
 
         $session = $this->resolveSession((string) $chatId, $message);
 
-        AiMessage::user($text)
-            ->forceFill(['ai_session_id' => $session->id])
-            ->save();
+        if ($isEditedMessage) {
+            $this->handleEditedMessage($session, $chatId, $incomingMessageId, $text);
 
-        try {
-            $this->sendChatAction($chatId, 'typing');
-        } catch (\Throwable $e) {
-            Log::warning('telegram.typing_failed', ['error' => $e->getMessage()]);
+            return;
         }
 
-        $reply = $this->runOrchestrator($session);
-
-        if ($reply === '') {
-            $reply = '(no response)';
-        }
-
-        AiMessage::assistant($reply)
-            ->forceFill(['ai_session_id' => $session->id])
-            ->save();
-
-        $this->sendMessage($chatId, $reply);
+        $this->handleNewMessage($session, $chatId, $incomingMessageId, $replyToMessageId, $text);
     }
 
     public function verifySecret(?string $headerSecret): bool
@@ -117,6 +128,183 @@ class TelegramService
         }
 
         return is_string($headerSecret) && hash_equals($this->webhookSecret, $headerSecret);
+    }
+
+    private function handleNewMessage(AiSession $session, int|string $chatId, int $incomingMessageId, ?int $replyToMessageId, string $text): void
+    {
+        if ($replyToMessageId !== null) {
+            $anchor = $session->messages()
+                ->where('telegram_message_id', $replyToMessageId)
+                ->orderByDesc('id')
+                ->first();
+
+            if ($anchor !== null) {
+                $this->pruneSessionAfter($session, $chatId, (int) $anchor->id, null, $replyToMessageId);
+            }
+        }
+
+        AiMessage::user($text)
+            ->forceFill([
+                'ai_session_id' => $session->id,
+                'telegram_message_id' => $incomingMessageId,
+                'reply_to_telegram_message_id' => $replyToMessageId,
+            ])
+            ->save();
+
+        $thinkingMessageId = $this->sendThinkingPlaceholder($chatId);
+        $reply = $this->replyAndPublish($session, $chatId, $thinkingMessageId);
+
+        AiMessage::assistant($reply)
+            ->forceFill([
+                'ai_session_id' => $session->id,
+                'telegram_message_id' => $thinkingMessageId,
+                'reply_to_telegram_message_id' => $incomingMessageId,
+            ])
+            ->save();
+    }
+
+    private function handleEditedMessage(AiSession $session, int|string $chatId, int $incomingMessageId, string $text): void
+    {
+        $editedUserMessage = $session->messages()
+            ->where('role', AiRoleEnum::User->value)
+            ->where('telegram_message_id', $incomingMessageId)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($editedUserMessage === null) {
+            $this->handleNewMessage($session, $chatId, $incomingMessageId, null, $text);
+
+            return;
+        }
+
+        $editedUserMessage->content = $text;
+        $editedUserMessage->save();
+
+        $this->pruneSessionAfter($session, $chatId, (int) $editedUserMessage->id, null, $incomingMessageId);
+        $thinkingMessageId = $this->sendThinkingPlaceholder($chatId);
+        $reply = $this->replyAndPublish($session, $chatId, $thinkingMessageId);
+
+        AiMessage::assistant($reply)
+            ->forceFill([
+                'ai_session_id' => $session->id,
+                'telegram_message_id' => $thinkingMessageId,
+                'reply_to_telegram_message_id' => $incomingMessageId,
+            ])
+            ->save();
+    }
+
+    private function pruneSessionAfter(
+        AiSession $session,
+        int|string $chatId,
+        int $messageId,
+        ?int $assistantMessageIdToKeep = null,
+        ?int $anchorTelegramMessageId = null
+    ): void
+    {
+        $messagesToDrop = $session->messages()
+            ->where('id', '>', $messageId)
+            ->orderBy('id')
+            ->get();
+
+        $deletedTelegramMessageIds = [];
+        $maxKnownTelegramMessageId = $anchorTelegramMessageId ?? 0;
+
+        foreach ($messagesToDrop as $message) {
+            if ($message->telegram_message_id !== null && (int) $message->telegram_message_id !== $assistantMessageIdToKeep) {
+                $telegramMessageId = (int) $message->telegram_message_id;
+                $maxKnownTelegramMessageId = max($maxKnownTelegramMessageId, $telegramMessageId);
+
+                try {
+                    $this->deleteMessage($chatId, $telegramMessageId);
+                    $deletedTelegramMessageIds[$telegramMessageId] = true;
+                } catch (\Throwable $e) {
+                    Log::warning('telegram.delete_message_failed', [
+                        'chat_id' => $chatId,
+                        'message_id' => $telegramMessageId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        if ($anchorTelegramMessageId !== null && $maxKnownTelegramMessageId > $anchorTelegramMessageId) {
+            for ($candidateMessageId = $anchorTelegramMessageId + 1; $candidateMessageId <= $maxKnownTelegramMessageId; $candidateMessageId++) {
+                if (
+                    isset($deletedTelegramMessageIds[$candidateMessageId])
+                    || ($assistantMessageIdToKeep !== null && $candidateMessageId === $assistantMessageIdToKeep)
+                ) {
+                    continue;
+                }
+
+                try {
+                    $this->deleteMessage($chatId, $candidateMessageId);
+                } catch (\Throwable $e) {
+                    Log::warning('telegram.delete_message_range_failed', [
+                        'chat_id' => $chatId,
+                        'message_id' => $candidateMessageId,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        $session->messages()->where('id', '>', $messageId)->delete();
+    }
+
+    private function sendThinkingPlaceholder(int|string $chatId, ?int $replyToMessageId = null): ?int
+    {
+        try {
+            $this->sendChatAction($chatId, 'typing');
+        } catch (\Throwable $e) {
+            Log::warning('telegram.typing_failed', ['error' => $e->getMessage()]);
+        }
+
+        try {
+            $extra = [];
+            if ($replyToMessageId !== null) {
+                $extra['reply_to_message_id'] = $replyToMessageId;
+            }
+
+            $response = $this->sendMessage($chatId, self::THINKING_TEXT, $extra);
+
+            return $this->extractTelegramMessageId($response);
+        } catch (\Throwable $e) {
+            Log::warning('telegram.send_thinking_failed', ['error' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    private function replyAndPublish(AiSession $session, int|string $chatId, ?int &$targetMessageId): string
+    {
+        $reply = $this->runOrchestrator($session);
+
+        if ($reply === '') {
+            $reply = '(no response)';
+        }
+
+        if ($targetMessageId !== null) {
+            try {
+                $response = $this->editMessageText($chatId, $targetMessageId, $reply);
+                $messageId = $this->extractTelegramMessageId($response);
+                if ($messageId !== null) {
+                    $targetMessageId = $messageId;
+                }
+
+                return $reply;
+            } catch (\Throwable $e) {
+                Log::warning('telegram.edit_reply_failed', [
+                    'chat_id' => $chatId,
+                    'message_id' => $targetMessageId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $response = $this->sendMessage($chatId, $reply);
+        $targetMessageId = $this->extractTelegramMessageId($response);
+
+        return $reply;
     }
 
     private function resolveSession(string $chatId, array $message): AiSession
@@ -146,13 +334,23 @@ class TelegramService
         return $orchestrator->askAi($messages);
     }
 
+    private function extractTelegramMessageId(array $response): ?int
+    {
+        $result = $response['result'] ?? null;
+        if (!is_array($result) || !isset($result['message_id'])) {
+            return null;
+        }
+
+        return (int) $result['message_id'];
+    }
+
     private function truncateForTelegram(string $text): string
     {
         if (mb_strlen($text) <= self::TELEGRAM_TEXT_LIMIT) {
             return $text;
         }
 
-        return mb_substr($text, 0, self::TELEGRAM_TEXT_LIMIT - 1) . '…';
+        return mb_substr($text, 0, self::TELEGRAM_TEXT_LIMIT - 1) . '...';
     }
 
     private function call(string $method, array $payload = []): array
@@ -163,6 +361,12 @@ class TelegramService
 
         $response->throw();
 
-        return $response->json();
+        $json = $response->json();
+        if (!is_array($json) || ($json['ok'] ?? false) !== true) {
+            $description = is_array($json) ? ($json['description'] ?? 'Unknown Telegram API error') : 'Invalid Telegram API response';
+            throw new RuntimeException((string) $description);
+        }
+
+        return $json;
     }
 }

@@ -11,6 +11,8 @@ class AiMessage extends Model
         'ai_session_id',
         'role',
         'content',
+        'telegram_message_id',
+        'reply_to_telegram_message_id',
         'tool_calls',
         'tool_name',
         'tool_call_id',
@@ -19,6 +21,8 @@ class AiMessage extends Model
     ];
 
     protected $casts = [
+        'telegram_message_id' => 'integer',
+        'reply_to_telegram_message_id' => 'integer',
         'tool_calls' => 'array',
         'context_origin_turn' => 'integer',
         'context_expires_after_turns' => 'integer',
