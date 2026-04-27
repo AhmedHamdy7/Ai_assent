@@ -2,6 +2,9 @@
 
 namespace App\AI\Tool;
 
+use App\AI\Tool\Expense\AddExpenseTool;
+use App\AI\Tool\Expense\ExpenseSummaryTool;
+use App\AI\Tool\Expense\ListExpensesTool;
 use App\AI\Tool\Task\CreateTaskTool;
 use App\AI\Tool\Task\DeleteTaskTool;
 use App\AI\Tool\Task\GetTaskTool;
@@ -30,6 +33,9 @@ class ToolRegistry
             new GetTaskTool(),
             new UpdateTaskTool(),
             new DeleteTaskTool(),
+            new AddExpenseTool(),
+            new ListExpensesTool(),
+            new ExpenseSummaryTool(),
             new WebSearchTool(
                 timeoutSeconds: $this->webSearchTimeoutSeconds,
                 maxResults: $this->webSearchMaxResults,

@@ -55,6 +55,7 @@ return [
         'web_search_max_results' => (int) env('AI_WEB_SEARCH_MAX_RESULTS', 5),
         'web_fetch_timeout' => (int) env('AI_WEB_FETCH_TIMEOUT', 15),
         'web_fetch_max_chars' => (int) env('AI_WEB_FETCH_MAX_CHARS', 12000),
+        'expense_currency' => env('AI_EXPENSE_CURRENCY', 'EGP'),
     ],
 
 ];
