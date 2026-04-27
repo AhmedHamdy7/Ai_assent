@@ -5,6 +5,7 @@ namespace App\Providers;
 use App\AI\Agent\BaseAgent;
 use App\AI\Agent\DefaultChatAgent;
 use App\AI\Messaging\Telegram\TelegramService;
+use App\AI\Messaging\Telegram\TelegramVoiceTranscriber;
 use App\AI\Provider\BaseProvider;
 use App\AI\Provider\OllamaProvider;
 use App\AI\Tool\ToolRegistry;
@@ -41,11 +42,20 @@ class AppServiceProvider extends ServiceProvider
 
         $this->app->singleton(TelegramService::class, function ($app) {
             $config = $app['config']->get('services.telegram');
+            $voiceConfig = $app['config']->get('services.telegram_voice', []);
 
             return new TelegramService(
                 botToken: (string) ($config['bot_token'] ?? ''),
                 webhookSecret: $config['webhook_secret'] ?? null,
                 timeout: (int) ($config['timeout'] ?? 10),
+                voiceTranscriber: new TelegramVoiceTranscriber(
+                    enabled: (bool) ($voiceConfig['enabled'] ?? false),
+                    apiKey: (string) ($voiceConfig['api_key'] ?? ''),
+                    apiUrl: (string) ($voiceConfig['api_url'] ?? 'https://api.openai.com/v1/audio/transcriptions'),
+                    model: (string) ($voiceConfig['model'] ?? 'whisper-1'),
+                    timeoutSeconds: (int) ($voiceConfig['timeout'] ?? 45),
+                    language: $voiceConfig['language'] ?? null,
+                ),
                 provider: $app->make(BaseProvider::class),
                 agent: $app->make(BaseAgent::class),
                 modelName: (string) $app['config']->get('services.ollama.model', 'llama3.2'),

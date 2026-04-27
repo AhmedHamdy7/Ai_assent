@@ -43,6 +43,15 @@ return [
         'history_limit' => (int) env('TELEGRAM_HISTORY_LIMIT', 30),
     ],
 
+    'telegram_voice' => [
+        'enabled' => (bool) env('TELEGRAM_VOICE_ENABLED', false),
+        'api_key' => env('TELEGRAM_VOICE_API_KEY', env('OPENAI_API_KEY')),
+        'api_url' => env('TELEGRAM_VOICE_API_URL', 'https://api.openai.com/v1/audio/transcriptions'),
+        'model' => env('TELEGRAM_VOICE_MODEL', 'whisper-1'),
+        'timeout' => (int) env('TELEGRAM_VOICE_TIMEOUT', 45),
+        'language' => env('TELEGRAM_VOICE_LANGUAGE', ''), // empty = auto-detect
+    ],
+
     'ollama' => [
         'api_key' => env('OLLAMA_API_KEY', ''),
         'api_url' => env('OLLAMA_API_URL', 'http://localhost:11434/api/chat'),

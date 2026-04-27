@@ -22,6 +22,7 @@ class TelegramService
         private string $botToken,
         private ?string $webhookSecret,
         private int $timeout,
+        private ?TelegramVoiceTranscriber $voiceTranscriber,
         private BaseProvider $provider,
         private BaseAgent $agent,
         private string $modelName,
@@ -105,8 +106,42 @@ class TelegramService
         $incomingMessageId = isset($message['message_id']) ? (int) $message['message_id'] : null;
         $replyToMessageId = isset($message['reply_to_message']['message_id']) ? (int) $message['reply_to_message']['message_id'] : null;
         $isEditedMessage = isset($update['edited_message']);
+        $hasVoicePayload = is_array($message['voice'] ?? null) || is_array($message['audio'] ?? null);
 
-        if ($chatId === null || !is_string($text) || trim($text) === '' || $incomingMessageId === null) {
+        if ($chatId === null || $incomingMessageId === null) {
+            return;
+        }
+
+        if (!is_string($text) || trim($text) === '') {
+            if ($hasVoicePayload) {
+                try {
+                    $text = $this->transcribeIncomingVoice($message);
+                } catch (\Throwable $e) {
+                    $userMessage = $this->resolveVoiceFailureUserMessage($e);
+
+                    Log::warning('telegram.voice_transcription_failed', [
+                        'chat_id' => $chatId,
+                        'message_id' => $incomingMessageId,
+                        'error' => $e->getMessage(),
+                        'user_message' => $userMessage,
+                    ]);
+
+                    try {
+                        $this->sendMessage($chatId, $userMessage);
+                    } catch (\Throwable $sendError) {
+                        Log::warning('telegram.voice_transcription_error_message_failed', [
+                            'chat_id' => $chatId,
+                            'message_id' => $incomingMessageId,
+                            'error' => $sendError->getMessage(),
+                        ]);
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        if (!is_string($text) || trim($text) === '') {
             return;
         }
 
@@ -402,6 +437,67 @@ class TelegramService
             ['telegram_chat_id' => $chatId],
             ['title' => $title],
         );
+    }
+
+    private function transcribeIncomingVoice(array $message): string
+    {
+        if ($this->voiceTranscriber === null || ! $this->voiceTranscriber->isEnabled()) {
+            throw new RuntimeException('Voice transcription is not enabled');
+        }
+
+        $voice = is_array($message['voice'] ?? null) ? $message['voice'] : null;
+        $audio = is_array($message['audio'] ?? null) ? $message['audio'] : null;
+        $file = $voice ?? $audio;
+
+        if (!is_array($file)) {
+            throw new RuntimeException('No voice or audio payload found');
+        }
+
+        $fileId = isset($file['file_id']) ? (string) $file['file_id'] : '';
+        if ($fileId === '') {
+            throw new RuntimeException('Voice file_id is missing');
+        }
+
+        $fileMeta = $this->call('getFile', ['file_id' => $fileId]);
+        $filePath = (string) ($fileMeta['result']['file_path'] ?? '');
+        if ($filePath === '') {
+            throw new RuntimeException('Telegram file_path is missing');
+        }
+
+        $downloadUrl = self::BASE_URL . "/file/bot{$this->botToken}/{$filePath}";
+        $downloadResponse = Http::timeout($this->timeout)->get($downloadUrl);
+        $downloadResponse->throw();
+
+        $binary = (string) $downloadResponse->body();
+        if ($binary === '') {
+            throw new RuntimeException('Downloaded voice file is empty');
+        }
+
+        $filename = basename($filePath);
+        if ($filename === '' || $filename === '.' || $filename === '..') {
+            $filename = is_array($voice) ? 'voice.ogg' : 'audio.bin';
+        }
+
+        return $this->voiceTranscriber->transcribe($binary, $filename);
+    }
+
+    private function resolveVoiceFailureUserMessage(\Throwable $e): string
+    {
+        $error = strtolower($e->getMessage());
+
+        if (str_contains($error, 'quota') || str_contains($error, 'billing') || str_contains($error, 'insufficient_quota')) {
+            return 'ميزة الفويس متوقفة مؤقتًا لأن رصيد خدمة التفريغ الصوتي خلص (API quota). جدد الرصيد أو غيّر المفتاح، وممكن تبعتلي الرسالة كنص حاليًا.';
+        }
+
+        if (str_contains($error, 'api key is missing') || str_contains($error, 'invalid api key') || str_contains($error, 'unauthorized')) {
+            return 'ميزة الفويس غير مفعلة بسبب مشكلة في API key. راجع إعدادات TELEGRAM_VOICE_API_KEY.';
+        }
+
+        if (str_contains($error, 'timeout')) {
+            return 'الفويس أخد وقت طويل ومكملش. جرّب تبعت فويس أقصر أو ابعته كنص.';
+        }
+
+        return 'مقدرتش أفهم الفويس. ابعته تاني أو ابعته كنص.';
     }
 
     private function runOrchestrator(AiSession $session): string
