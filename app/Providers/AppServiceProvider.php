@@ -7,6 +7,7 @@ use App\AI\Agent\DefaultChatAgent;
 use App\AI\Messaging\Telegram\TelegramService;
 use App\AI\Provider\BaseProvider;
 use App\AI\Provider\OllamaProvider;
+use App\AI\Tool\ToolRegistry;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -23,7 +24,20 @@ class AppServiceProvider extends ServiceProvider
             );
         });
 
-        $this->app->singleton(BaseAgent::class, fn () => new DefaultChatAgent());
+        $this->app->singleton(ToolRegistry::class, function ($app) {
+            $config = $app['config']->get('services.ai_tools', []);
+
+            return new ToolRegistry(
+                webSearchTimeoutSeconds: (int) ($config['web_search_timeout'] ?? 12),
+                webSearchMaxResults: (int) ($config['web_search_max_results'] ?? 5),
+                webFetchTimeoutSeconds: (int) ($config['web_fetch_timeout'] ?? 15),
+                webFetchMaxContentChars: (int) ($config['web_fetch_max_chars'] ?? 12000),
+            );
+        });
+
+        $this->app->singleton(BaseAgent::class, fn ($app) => new DefaultChatAgent(
+            toolRegistry: $app->make(ToolRegistry::class),
+        ));
 
         $this->app->singleton(TelegramService::class, function ($app) {
             $config = $app['config']->get('services.telegram');

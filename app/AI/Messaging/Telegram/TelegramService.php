@@ -283,6 +283,8 @@ class TelegramService
             $reply = '(no response)';
         }
 
+        $reply = $this->formatAssistantReply($reply);
+
         if ($targetMessageId !== null) {
             try {
                 $response = $this->editMessageText($chatId, $targetMessageId, $reply);
@@ -305,6 +307,89 @@ class TelegramService
         $targetMessageId = $this->extractTelegramMessageId($response);
 
         return $reply;
+    }
+
+    private function formatAssistantReply(string $reply): string
+    {
+        $reply = trim($reply);
+        if ($reply === '') {
+            return '(no response)';
+        }
+
+        $decoded = json_decode($reply, true);
+        if (is_array($decoded)) {
+            $formatted = $this->formatArrayAsText($decoded);
+            if ($formatted !== '') {
+                return $formatted;
+            }
+        }
+
+        $reply = preg_replace("/[ \t]+/", ' ', $reply) ?? $reply;
+        $reply = preg_replace("/\n{3,}/", "\n\n", $reply) ?? $reply;
+
+        return trim($reply);
+    }
+
+    private function formatArrayAsText(array $data): string
+    {
+        $lines = [];
+        $this->appendFormattedLines($lines, $data);
+
+        $text = trim(implode("\n", $lines));
+        $text = preg_replace("/\n{3,}/", "\n\n", $text) ?? $text;
+
+        return trim($text);
+    }
+
+    private function appendFormattedLines(array &$lines, array $data, int $depth = 0, ?string $label = null): void
+    {
+        $indent = str_repeat('  ', max(0, $depth));
+
+        if ($label !== null) {
+            $lines[] = $indent . $label . ':';
+            $indent = str_repeat('  ', $depth + 1);
+        }
+
+        $isList = array_keys($data) === range(0, count($data) - 1);
+
+        foreach ($data as $key => $value) {
+            if (is_array($value)) {
+                if ($isList) {
+                    $this->appendFormattedLines($lines, $value, $depth + 1, ((string) ((int) $key + 1)));
+                } else {
+                    $this->appendFormattedLines($lines, $value, $depth + 1, (string) $key);
+                }
+                continue;
+            }
+
+            $scalar = $this->stringifyScalar($value);
+            if ($scalar === '') {
+                continue;
+            }
+
+            if ($isList) {
+                $lines[] = $indent . '- ' . $scalar;
+            } else {
+                $lines[] = $indent . (string) $key . ': ' . $scalar;
+            }
+        }
+    }
+
+    private function stringifyScalar(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'true' : 'false';
+        }
+
+        if ($value === null) {
+            return '';
+        }
+
+        if (is_scalar($value)) {
+            return trim((string) $value);
+        }
+
+        return '';
     }
 
     private function resolveSession(string $chatId, array $message): AiSession
@@ -331,7 +416,10 @@ class TelegramService
 
         $orchestrator = new Orchestrator($this->provider, $this->agent, $this->modelName);
 
-        return $orchestrator->askAi($messages);
+        return $orchestrator->askAi($messages, [
+            'ai_session_id' => (int) $session->id,
+            'telegram_chat_id' => (string) $session->telegram_chat_id,
+        ]);
     }
 
     private function extractTelegramMessageId(array $response): ?int

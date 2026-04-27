@@ -17,7 +17,7 @@ class Orchestrator
     /**
      * @param AiMessage[] $messages
      */
-    public function askAi(array $messages): string
+    public function askAi(array $messages, array $toolContext = []): string
     {
         $toolsByName = [];
         foreach ($this->agent->getTools() as $tool) {
@@ -34,7 +34,7 @@ class Orchestrator
                 if ($tool === null) {
                     continue;
                 }
-                $result = $tool->execute($toolCall->arguments);
+                $result = $tool->execute($toolCall->arguments, $toolContext);
                 $messages[] = AiMessage::tool($toolCall->name, (string) $result, $toolCall->id);
             }
         } while ($response->hasToolCalls());

@@ -12,5 +12,5 @@ abstract class BaseTool
 
     abstract public function getParameters(): array;
 
-    abstract public function execute(array $arguments): ToolResult;
+    abstract public function execute(array $arguments, array $context = []): ToolResult;
 }
