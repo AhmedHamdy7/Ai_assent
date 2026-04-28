@@ -3,7 +3,10 @@
 namespace App\AI\Provider;
 
 use App\AI\Agent\BaseAgent;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
 
 class OllamaProvider extends BaseProvider
 {
@@ -49,11 +52,26 @@ class OllamaProvider extends BaseProvider
             ], $tools);
         }
 
-        $response = Http::withToken($this->apiKey)
-            ->timeout($this->timeout)
-            ->post($this->apiUrl, $body);
+        try {
+            $response = Http::withToken($this->apiKey)
+                ->timeout($this->timeout)
+                ->post($this->apiUrl, $body);
 
-        $response->throw();
+            $response->throw();
+        } catch (ConnectionException $e) {
+            throw new RuntimeException(
+                "AI provider connection failed for {$this->apiUrl}: {$e->getMessage()}",
+                previous: $e
+            );
+        } catch (RequestException $e) {
+            $bodyText = trim((string) $e->response?->body());
+            $details = $bodyText !== '' ? $bodyText : $e->getMessage();
+
+            throw new RuntimeException(
+                "AI provider request failed for {$this->apiUrl}: {$details}",
+                previous: $e
+            );
+        }
 
         return AiModel::fromOllama($response->json());
     }

@@ -54,6 +54,12 @@ class AddExpenseTool extends AbstractExpenseTool
             return ToolResult::fromPayload(['ok' => false, 'message' => 'Invalid spent_at format']);
         }
 
+        $rawSpentAt = isset($arguments['spent_at']) ? trim((string) $arguments['spent_at']) : '';
+        if ($rawSpentAt !== '' && ! $this->hasExplicitTime($rawSpentAt) && $spentAt->format('H:i:s') === '00:00:00') {
+            // Avoid DST-invalid midnight timestamps (e.g. DST switch days).
+            $spentAt = $spentAt->copy()->setTime(12, 0, 0);
+        }
+
         $expense = AiExpense::query()->create([
             'ai_session_id' => $this->resolveSessionId($context),
             'amount' => round($amount, 2),
@@ -80,5 +86,29 @@ class AddExpenseTool extends AbstractExpenseTool
             'note' => $expense->note,
             'spent_at' => optional($expense->spent_at)->toIso8601String(),
         ];
+    }
+
+    private function hasExplicitTime(string $value): bool
+    {
+        $normalized = strtolower($value);
+
+        if (preg_match('/\d{1,2}:\d{2}(:\d{2})?/', $normalized) === 1) {
+            return true;
+        }
+
+        if (str_contains($normalized, 't')) {
+            return true;
+        }
+
+        if (
+            str_contains($normalized, 'am')
+            || str_contains($normalized, 'pm')
+            || str_contains($normalized, 'ص')
+            || str_contains($normalized, 'م')
+        ) {
+            return true;
+        }
+
+        return false;
     }
 }

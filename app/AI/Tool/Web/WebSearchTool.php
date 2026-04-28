@@ -4,6 +4,7 @@ namespace App\AI\Tool\Web;
 
 use App\AI\Provider\ToolResult;
 use App\AI\Tool\BaseTool;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -48,6 +49,87 @@ class WebSearchTool extends BaseTool
         $limit = (int) ($arguments['limit'] ?? $this->maxResults);
         $limit = max(1, min($limit, 10));
 
+        try {
+            $results = $this->searchHtmlResults($query, $limit);
+
+            if ($results === []) {
+                $results = $this->searchBingResults($query, $limit);
+            }
+
+            if ($results === []) {
+                $results = $this->searchInstantAnswerApi($query, $limit);
+            }
+        } catch (RequestException $e) {
+            $details = trim((string) $e->response?->body());
+
+            return ToolResult::fromPayload([
+                'ok' => false,
+                'message' => $details !== ''
+                    ? 'Web search failed: ' . Str::limit($details, 300, '...')
+                    : 'Web search failed: ' . $e->getMessage(),
+                'query' => $query,
+                'results' => [],
+            ]);
+        } catch (\Throwable $e) {
+            return ToolResult::fromPayload([
+                'ok' => false,
+                'message' => 'Web search failed: ' . $e->getMessage(),
+                'query' => $query,
+                'results' => [],
+            ]);
+        }
+
+        return ToolResult::fromPayload([
+            'ok' => true,
+            'message' => empty($results)
+                ? 'No web results found.'
+                : 'Found ' . count($results) . ' web result(s).',
+            'query' => $query,
+            'results' => $results,
+        ]);
+    }
+
+    private function searchHtmlResults(string $query, int $limit): array
+    {
+        $response = Http::timeout($this->timeoutSeconds)
+            ->withHeaders([
+                'User-Agent' => 'HamdixBot/1.0 (+web_search)',
+                'Accept-Language' => 'en-US,en;q=0.9',
+            ])
+            ->asForm()
+            ->post('https://html.duckduckgo.com/html/', [
+                'q' => $query,
+            ]);
+
+        $response->throw();
+
+        $body = (string) $response->body();
+        if (str_contains($body, 'anomaly.js')) {
+            return [];
+        }
+
+        return $this->extractHtmlResults($body, $limit);
+    }
+
+    private function searchBingResults(string $query, int $limit): array
+    {
+        $response = Http::timeout($this->timeoutSeconds)
+            ->withHeaders([
+                'User-Agent' => 'Mozilla/5.0',
+                'Accept-Language' => 'en-US,en;q=0.9',
+            ])
+            ->get('https://www.bing.com/search', [
+                'q' => $query,
+                'format' => 'rss',
+            ]);
+
+        $response->throw();
+
+        return $this->extractBingResults((string) $response->body(), $limit);
+    }
+
+    private function searchInstantAnswerApi(string $query, int $limit): array
+    {
         $response = Http::timeout($this->timeoutSeconds)
             ->acceptJson()
             ->get('https://api.duckduckgo.com/', [
@@ -100,16 +182,80 @@ class WebSearchTool extends BaseTool
             }
         }
 
-        $results = array_slice($results, 0, $limit);
+        return array_slice($results, 0, $limit);
+    }
 
-        return ToolResult::fromPayload([
-            'ok' => true,
-            'message' => empty($results)
-                ? 'No web results found.'
-                : 'Found ' . count($results) . ' web result(s).',
-            'query' => $query,
-            'results' => $results,
-        ]);
+    private function extractHtmlResults(string $html, int $limit): array
+    {
+        $results = [];
+        $pattern = '/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)<\/a>.*?(?:<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(?P<snippet_a>.*?)<\/a>|<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(?P<snippet_span>.*?)<\/span>)/si';
+
+        $matched = preg_match_all($pattern, $html, $matches, PREG_SET_ORDER);
+        if ($matched === false || $matched === 0) {
+            return [];
+        }
+
+        foreach ($matches as $match) {
+            if (count($results) >= $limit) {
+                break;
+            }
+
+            $url = trim(html_entity_decode((string) ($match['url'] ?? ''), ENT_QUOTES | ENT_HTML5));
+            $title = $this->cleanHtmlText((string) ($match['title'] ?? ''));
+            $snippet = $this->cleanHtmlText((string) (($match['snippet_a'] ?? '') !== '' ? $match['snippet_a'] : ($match['snippet_span'] ?? '')));
+
+            if ($url === '' || $title === '') {
+                continue;
+            }
+
+            $results[] = [
+                'title' => Str::limit($title, 140, '...'),
+                'url' => $url,
+                'snippet' => Str::limit($snippet !== '' ? $snippet : $title, 280, '...'),
+            ];
+        }
+
+        return $results;
+    }
+
+    private function extractBingResults(string $html, int $limit): array
+    {
+        $results = [];
+
+        $xml = @simplexml_load_string($html);
+        if ($xml === false || ! isset($xml->channel->item)) {
+            return [];
+        }
+
+        foreach ($xml->channel->item as $item) {
+            if (count($results) >= $limit) {
+                break;
+            }
+
+            $url = trim((string) ($item->link ?? ''));
+            $title = $this->cleanHtmlText((string) ($item->title ?? ''));
+            $snippet = $this->cleanHtmlText((string) ($item->description ?? ''));
+
+            if ($url === '' || $title === '') {
+                continue;
+            }
+
+            $results[] = [
+                'title' => Str::limit($title, 140, '...'),
+                'url' => $url,
+                'snippet' => Str::limit($snippet !== '' ? $snippet : $title, 280, '...'),
+            ];
+        }
+
+        return $results;
+    }
+
+    private function cleanHtmlText(string $value): string
+    {
+        $value = strip_tags(html_entity_decode($value, ENT_QUOTES | ENT_HTML5));
+        $value = preg_replace('/\s+/', ' ', $value) ?? $value;
+
+        return trim($value);
     }
 
     private function mapTopicToResult(array $topic): ?array

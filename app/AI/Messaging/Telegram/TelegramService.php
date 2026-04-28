@@ -187,7 +187,26 @@ class TelegramService
             ->save();
 
         $thinkingMessageId = $this->sendThinkingPlaceholder($chatId);
-        $reply = $this->replyAndPublish($session, $chatId, $thinkingMessageId);
+        try {
+            $reply = $this->replyAndPublish($session, $chatId, $thinkingMessageId);
+        } catch (\Throwable $e) {
+            Log::error('telegram.reply_failed', [
+                'chat_id' => $chatId,
+                'message_id' => $incomingMessageId,
+                'error' => $e->getMessage(),
+            ]);
+
+            $reply = 'حصل خطأ أثناء تنفيذ الطلب. جرّب تاني.';
+            if ($thinkingMessageId !== null) {
+                try {
+                    $this->editMessageText($chatId, $thinkingMessageId, $reply);
+                } catch (\Throwable) {
+                    $this->sendMessage($chatId, $reply);
+                }
+            } else {
+                $this->sendMessage($chatId, $reply);
+            }
+        }
 
         AiMessage::assistant($reply)
             ->forceFill([
@@ -217,7 +236,26 @@ class TelegramService
 
         $this->pruneSessionAfter($session, $chatId, (int) $editedUserMessage->id, null, $incomingMessageId);
         $thinkingMessageId = $this->sendThinkingPlaceholder($chatId);
-        $reply = $this->replyAndPublish($session, $chatId, $thinkingMessageId);
+        try {
+            $reply = $this->replyAndPublish($session, $chatId, $thinkingMessageId);
+        } catch (\Throwable $e) {
+            Log::error('telegram.reply_failed', [
+                'chat_id' => $chatId,
+                'message_id' => $incomingMessageId,
+                'error' => $e->getMessage(),
+            ]);
+
+            $reply = 'حصل خطأ أثناء تنفيذ الطلب. جرّب تاني.';
+            if ($thinkingMessageId !== null) {
+                try {
+                    $this->editMessageText($chatId, $thinkingMessageId, $reply);
+                } catch (\Throwable) {
+                    $this->sendMessage($chatId, $reply);
+                }
+            } else {
+                $this->sendMessage($chatId, $reply);
+            }
+        }
 
         AiMessage::assistant($reply)
             ->forceFill([
@@ -500,9 +538,43 @@ class TelegramService
         return 'مقدرتش أفهم الفويس. ابعته تاني أو ابعته كنص.';
     }
 
+    private function resolveAssistantFailureUserMessage(\Throwable $e): string
+    {
+        $error = strtolower($e->getMessage());
+
+        if (
+            str_contains($error, 'connection failed')
+            || str_contains($error, 'couldn\'t connect to server')
+            || str_contains($error, 'curl error 7')
+        ) {
+            return 'خدمة الذكاء الاصطناعي مش متاحة دلوقتي أو مش متوصلة صح. راجع OLLAMA_API_URL و OLLAMA_API_KEY وجرّب تاني.';
+        }
+
+        if (str_contains($error, 'timeout')) {
+            return 'الخدمة أخدت وقت أطول من اللازم ومكملتش الرد. جرّب تاني أو ابعت طلب أقصر.';
+        }
+
+        if (
+            str_contains($error, 'creating the response')
+            || str_contains($error, 'provider request failed')
+            || str_contains($error, 'tool failed')
+        ) {
+            return 'حصلت مشكلة أثناء تنفيذ الطلب من خدمة الذكاء الاصطناعي أو إحدى الأدوات. لو الرابط من LinkedIn فممكن يكون الموقع مانع القراءة المباشرة.';
+        }
+
+        return 'حصل خطأ أثناء تنفيذ الطلب. جرّب تاني.';
+    }
+
     private function runOrchestrator(AiSession $session): string
     {
-        $messages = $session->messages()
+        $query = $session->messages();
+
+        $contextStartAfterMessageId = (int) ($session->context_starts_after_message_id ?? 0);
+        if ($contextStartAfterMessageId > 0) {
+            $query->where('id', '>', $contextStartAfterMessageId);
+        }
+
+        $messages = $query
             ->orderByDesc('id')
             ->limit($this->historyLimit)
             ->get()

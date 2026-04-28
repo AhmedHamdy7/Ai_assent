@@ -4,6 +4,7 @@ namespace App\AI\Tool\Web;
 
 use App\AI\Provider\ToolResult;
 use App\AI\Tool\BaseTool;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -51,11 +52,34 @@ class WebFetchTool extends BaseTool
         $maxChars = (int) ($arguments['max_chars'] ?? $this->maxContentChars);
         $maxChars = max(500, min($maxChars, 30000));
 
-        $response = Http::timeout($this->timeoutSeconds)
-            ->withHeaders(['User-Agent' => 'HamdixBot/1.0 (+web_fetch)'])
-            ->get($url);
+        try {
+            $response = Http::timeout($this->timeoutSeconds)
+                ->withHeaders(['User-Agent' => 'HamdixBot/1.0 (+web_fetch)'])
+                ->get($url);
 
-        $response->throw();
+            $response->throw();
+        } catch (RequestException $e) {
+            $details = trim((string) $e->response?->body());
+            $message = $details !== ''
+                ? 'Failed to fetch URL: ' . Str::limit($details, 300, '...')
+                : 'Failed to fetch URL: ' . $e->getMessage();
+
+            if (str_contains(strtolower($url), 'linkedin.com')) {
+                $message = 'LinkedIn blocked direct page fetching. Ask for a profile summary from the URL itself or use another public source.';
+            }
+
+            return ToolResult::fromPayload([
+                'ok' => false,
+                'message' => $message,
+                'url' => $url,
+            ]);
+        } catch (\Throwable $e) {
+            return ToolResult::fromPayload([
+                'ok' => false,
+                'message' => 'Failed to fetch URL: ' . $e->getMessage(),
+                'url' => $url,
+            ]);
+        }
 
         $contentType = strtolower((string) $response->header('Content-Type', ''));
         $body = (string) $response->body();

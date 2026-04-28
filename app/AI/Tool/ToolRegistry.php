@@ -2,9 +2,16 @@
 
 namespace App\AI\Tool;
 
+use App\AI\Learning\CurriculumBuilder;
 use App\AI\Tool\Expense\AddExpenseTool;
 use App\AI\Tool\Expense\ExpenseSummaryTool;
 use App\AI\Tool\Expense\ListExpensesTool;
+use App\AI\Tool\Learning\CreateLearningTrackTool;
+use App\AI\Tool\Learning\GetLearningLessonTool;
+use App\AI\Tool\Learning\GetLearningProgressTool;
+use App\AI\Tool\Learning\ListLearningTracksTool;
+use App\AI\Tool\Learning\SubmitLearningQuizTool;
+use App\AI\Tool\Session\StartNewSessionTool;
 use App\AI\Tool\Task\CreateTaskTool;
 use App\AI\Tool\Task\DeleteTaskTool;
 use App\AI\Tool\Task\GetTaskTool;
@@ -16,6 +23,7 @@ use App\AI\Tool\Web\WebSearchTool;
 class ToolRegistry
 {
     public function __construct(
+        private readonly CurriculumBuilder $curriculumBuilder = new CurriculumBuilder(),
         private readonly int $webSearchTimeoutSeconds = 12,
         private readonly int $webSearchMaxResults = 5,
         private readonly int $webFetchTimeoutSeconds = 15,
@@ -28,6 +36,7 @@ class ToolRegistry
     public function all(): array
     {
         return [
+            new StartNewSessionTool(),
             new CreateTaskTool(),
             new ListTasksTool(),
             new GetTaskTool(),
@@ -36,6 +45,11 @@ class ToolRegistry
             new AddExpenseTool(),
             new ListExpensesTool(),
             new ExpenseSummaryTool(),
+            new CreateLearningTrackTool($this->curriculumBuilder),
+            new ListLearningTracksTool(),
+            new GetLearningLessonTool(),
+            new SubmitLearningQuizTool(),
+            new GetLearningProgressTool(),
             new WebSearchTool(
                 timeoutSeconds: $this->webSearchTimeoutSeconds,
                 maxResults: $this->webSearchMaxResults,

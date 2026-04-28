@@ -12,10 +12,12 @@ class AiSession extends Model
         'title',
         'token',
         'compaction_count',
+        'context_starts_after_message_id',
     ];
 
     protected $casts = [
         'compaction_count' => 'integer',
+        'context_starts_after_message_id' => 'integer',
     ];
 
     public function messages(): HasMany
