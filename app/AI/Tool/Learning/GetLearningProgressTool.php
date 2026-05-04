@@ -11,6 +11,11 @@ class GetLearningProgressTool extends AbstractLearningTool
         return 'get_learning_progress';
     }
 
+    public function eventAction(): string
+    {
+        return 'Checking learning progress';
+    }
+
     public function getDescription(): string
     {
         return 'Summarize progress for a study track including completion percent and next lesson.';

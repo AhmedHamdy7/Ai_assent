@@ -12,6 +12,11 @@ class ListExpensesTool extends AbstractExpenseTool
         return 'list_expenses';
     }
 
+    public function eventAction(): string
+    {
+        return 'Listing expense records';
+    }
+
     public function getDescription(): string
     {
         return 'List expenses for a month in the current chat session.';

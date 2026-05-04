@@ -13,6 +13,11 @@ class UpdateTaskTool extends AbstractTaskTool
         return 'update_task';
     }
 
+    public function eventAction(): string
+    {
+        return 'Updating a task';
+    }
+
     public function getDescription(): string
     {
         return 'Update task fields like title, details, status, priority, or due date.';

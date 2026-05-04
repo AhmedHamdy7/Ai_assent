@@ -12,6 +12,11 @@ class ListTasksTool extends AbstractTaskTool
         return 'list_tasks';
     }
 
+    public function eventAction(): string
+    {
+        return 'Listing tasks';
+    }
+
     public function getDescription(): string
     {
         return 'List tasks for the current chat session, optionally filtered by status.';

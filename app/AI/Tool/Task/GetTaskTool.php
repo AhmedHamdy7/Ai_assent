@@ -12,6 +12,11 @@ class GetTaskTool extends AbstractTaskTool
         return 'get_task';
     }
 
+    public function eventAction(): string
+    {
+        return 'Loading a task';
+    }
+
     public function getDescription(): string
     {
         return 'Get a single task by id from the current chat session.';

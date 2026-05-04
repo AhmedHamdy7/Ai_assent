@@ -11,6 +11,11 @@ class GetLearningLessonTool extends AbstractLearningTool
         return 'get_learning_lesson';
     }
 
+    public function eventAction(): string
+    {
+        return 'Loading a learning lesson';
+    }
+
     public function getDescription(): string
     {
         return 'Get the next or a specific daily lesson from a study track.';

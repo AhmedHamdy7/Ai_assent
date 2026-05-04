@@ -8,6 +8,8 @@ abstract class BaseTool
 {
     abstract public function getName(): string;
 
+    abstract public function eventAction(): string;
+
     abstract public function getDescription(): string;
 
     abstract public function getParameters(): array;

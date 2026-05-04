@@ -12,6 +12,11 @@ class CreateTaskTool extends AbstractTaskTool
         return 'create_task';
     }
 
+    public function eventAction(): string
+    {
+        return 'Creating a task';
+    }
+
     public function getDescription(): string
     {
         return 'Create a new task for the current chat session.';

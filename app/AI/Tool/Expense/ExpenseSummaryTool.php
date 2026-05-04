@@ -14,6 +14,11 @@ class ExpenseSummaryTool extends AbstractExpenseTool
         return 'expense_summary';
     }
 
+    public function eventAction(): string
+    {
+        return 'Generating an expense summary';
+    }
+
     public function getDescription(): string
     {
         return 'Generate a monthly expense summary: total spent, top category, and saving suggestion.';

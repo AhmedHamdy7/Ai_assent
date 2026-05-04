@@ -23,7 +23,7 @@ class Orchestrator
     /**
      * @param AiMessage[] $messages
      */
-    public function askAi(array $messages, array $toolContext = []): string
+    public function askAi(array $messages, array $toolContext = [], ?callable $onToolStart = null): string
     {
         $toolsByName = [];
         foreach ($this->agent->getTools() as $tool) {
@@ -54,6 +54,10 @@ class Orchestrator
                 }
 
                 try {
+                    if ($onToolStart !== null) {
+                        $onToolStart($tool->eventAction());
+                    }
+
                     $result = $tool->execute($toolCall->arguments, $toolContext);
                 } catch (Throwable $e) {
                     $result = ToolResult::fromPayload([

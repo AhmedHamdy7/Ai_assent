@@ -108,6 +108,7 @@ class TelegramService
         $replyToMessageId = isset($message['reply_to_message']['message_id']) ? (int) $message['reply_to_message']['message_id'] : null;
         $isEditedMessage = isset($update['edited_message']);
         $hasVoicePayload = is_array($message['voice'] ?? null) || is_array($message['audio'] ?? null);
+        $thinkingMessageId = null;
 
         if ($chatId === null || $incomingMessageId === null) {
             return;
@@ -115,6 +116,8 @@ class TelegramService
 
         if (!is_string($text) || trim($text) === '') {
             if ($hasVoicePayload) {
+                $thinkingMessageId = $this->sendThinkingPlaceholder($chatId);
+
                 try {
                     $text = $this->transcribeIncomingVoice($message);
                 } catch (\Throwable $e) {
@@ -128,7 +131,11 @@ class TelegramService
                     ]);
 
                     try {
-                        $this->sendMessage($chatId, $userMessage);
+                        if ($thinkingMessageId !== null) {
+                            $this->editMessageText($chatId, $thinkingMessageId, $userMessage);
+                        } else {
+                            $this->sendMessage($chatId, $userMessage);
+                        }
                     } catch (\Throwable $sendError) {
                         Log::warning('telegram.voice_transcription_error_message_failed', [
                             'chat_id' => $chatId,
@@ -154,7 +161,7 @@ class TelegramService
             return;
         }
 
-        $this->handleNewMessage($session, $chatId, $incomingMessageId, $replyToMessageId, $text);
+        $this->handleNewMessage($session, $chatId, $incomingMessageId, $replyToMessageId, $text, $thinkingMessageId);
     }
 
     public function verifySecret(?string $headerSecret): bool
@@ -166,7 +173,14 @@ class TelegramService
         return is_string($headerSecret) && hash_equals($this->webhookSecret, $headerSecret);
     }
 
-    private function handleNewMessage(AiSession $session, int|string $chatId, int $incomingMessageId, ?int $replyToMessageId, string $text): void
+    private function handleNewMessage(
+        AiSession $session,
+        int|string $chatId,
+        int $incomingMessageId,
+        ?int $replyToMessageId,
+        string $text,
+        ?int $thinkingMessageId = null
+    ): void
     {
         if ($replyToMessageId !== null) {
             $anchor = $session->messages()
@@ -187,7 +201,7 @@ class TelegramService
             ])
             ->save();
 
-        $thinkingMessageId = $this->sendThinkingPlaceholder($chatId);
+        $thinkingMessageId ??= $this->sendThinkingPlaceholder($chatId);
         try {
             $reply = $this->replyAndPublish($session, $chatId, $thinkingMessageId);
         } catch (\Throwable $e) {
@@ -351,7 +365,7 @@ class TelegramService
 
     private function replyAndPublish(AiSession $session, int|string $chatId, ?int &$targetMessageId): string
     {
-        $reply = $this->runOrchestrator($session);
+        $reply = $this->runOrchestrator($session, $chatId, $targetMessageId);
 
         if ($reply === '') {
             $reply = '(no response)';
@@ -563,7 +577,7 @@ class TelegramService
         return 'حصل خطأ أثناء تنفيذ الطلب. جرّب تاني.';
     }
 
-    private function runOrchestrator(AiSession $session): string
+    private function runOrchestrator(AiSession $session, int|string $chatId, ?int $thinkingMessageId = null): string
     {
         $query = $session->messages();
 
@@ -580,10 +594,27 @@ class TelegramService
             ->values()
             ->all();
 
+        $onToolStart = null;
+
+        if ($thinkingMessageId !== null) {
+            $onToolStart = function (string $eventAction) use ($chatId, $thinkingMessageId): void {
+                try {
+                    $this->editMessageText($chatId, $thinkingMessageId, $eventAction . '...');
+                } catch (\Throwable $e) {
+                    Log::warning('telegram.tool_event_status_failed', [
+                        'chat_id' => $chatId,
+                        'message_id' => $thinkingMessageId,
+                        'event_action' => $eventAction,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            };
+        }
+
         return $this->makeOrchestrator()->askAi($messages, [
             'ai_session_id' => (int) $session->id,
             'telegram_chat_id' => (string) $session->telegram_chat_id,
-        ]);
+        ], $onToolStart);
     }
 
     private function makeOrchestrator(): Orchestrator

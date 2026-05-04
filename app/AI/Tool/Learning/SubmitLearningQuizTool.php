@@ -15,6 +15,11 @@ class SubmitLearningQuizTool extends AbstractLearningTool
         return 'submit_learning_quiz';
     }
 
+    public function eventAction(): string
+    {
+        return 'Submitting a quiz answer set';
+    }
+
     public function getDescription(): string
     {
         return 'Grade a user quiz submission for a lesson, save the attempt, and update progress.';

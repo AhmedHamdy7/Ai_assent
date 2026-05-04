@@ -12,6 +12,11 @@ class DeleteTaskTool extends AbstractTaskTool
         return 'delete_task';
     }
 
+    public function eventAction(): string
+    {
+        return 'Deleting a task';
+    }
+
     public function getDescription(): string
     {
         return 'Delete a task by id from the current chat session.';

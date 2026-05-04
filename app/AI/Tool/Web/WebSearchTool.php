@@ -21,6 +21,11 @@ class WebSearchTool extends BaseTool
         return 'web_search';
     }
 
+    public function eventAction(): string
+    {
+        return 'Searching the web';
+    }
+
     public function getDescription(): string
     {
         return 'Search the web for current information and return short result snippets with URLs.';

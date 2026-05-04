@@ -13,6 +13,11 @@ class AddExpenseTool extends AbstractExpenseTool
         return 'add_expense';
     }
 
+    public function eventAction(): string
+    {
+        return 'Adding an expense record';
+    }
+
     public function getDescription(): string
     {
         return 'Add a new expense record for the current chat session.';

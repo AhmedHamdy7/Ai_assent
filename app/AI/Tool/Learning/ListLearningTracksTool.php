@@ -12,6 +12,11 @@ class ListLearningTracksTool extends AbstractLearningTool
         return 'list_learning_tracks';
     }
 
+    public function eventAction(): string
+    {
+        return 'Listing learning tracks';
+    }
+
     public function getDescription(): string
     {
         return 'List the current study tracks for this chat, including progress and next lesson.';

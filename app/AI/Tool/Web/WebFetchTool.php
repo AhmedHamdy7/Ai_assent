@@ -20,6 +20,11 @@ class WebFetchTool extends BaseTool
         return 'web_fetch';
     }
 
+    public function eventAction(): string
+    {
+        return 'Fetching a web page';
+    }
+
     public function getDescription(): string
     {
         return 'Fetch and extract readable text content from a public web URL.';

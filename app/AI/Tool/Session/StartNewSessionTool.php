@@ -15,6 +15,11 @@ class StartNewSessionTool extends BaseTool
         return 'start_new_session';
     }
 
+    public function eventAction(): string
+    {
+        return 'Starting a new chat session';
+    }
+
     public function getDescription(): string
     {
         return 'Start a fresh chat context from this point without deleting stored tasks, expenses, or old messages.';

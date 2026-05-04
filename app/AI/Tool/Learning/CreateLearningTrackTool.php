@@ -19,6 +19,11 @@ class CreateLearningTrackTool extends AbstractLearningTool
         return 'create_learning_track';
     }
 
+    public function eventAction(): string
+    {
+        return 'Creating a learning track';
+    }
+
     public function getDescription(): string
     {
         return 'Create a structured study track with daily lessons and quizzes for a topic like Docker or English.';
