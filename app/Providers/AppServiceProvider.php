@@ -4,10 +4,14 @@ namespace App\Providers;
 
 use App\AI\Agent\BaseAgent;
 use App\AI\Agent\DefaultChatAgent;
+use App\AI\Audio\AudioConverter;
+use App\AI\Audio\FfmpegInstaller;
 use App\AI\Messaging\Telegram\TelegramService;
-use App\AI\Messaging\Telegram\TelegramVoiceTranscriber;
 use App\AI\Provider\BaseProvider;
 use App\AI\Provider\OllamaProvider;
+use App\AI\SpeechToText\GroqSpeechToText;
+use App\AI\SpeechToText\OpenAISpeechToText;
+use App\AI\SpeechToText\SpeechToTextProvider;
 use App\AI\Tool\ToolRegistry;
 use Illuminate\Support\ServiceProvider;
 
@@ -40,25 +44,48 @@ class AppServiceProvider extends ServiceProvider
             toolRegistry: $app->make(ToolRegistry::class),
         ));
 
+        $this->app->singleton(SpeechToTextProvider::class, function ($app) {
+            $config = $app['config']->get('services.telegram_voice', []);
+            $enabled = (bool) ($config['enabled'] ?? false);
+            $apiKey = trim((string) ($config['api_key'] ?? ''));
+
+            if (! $enabled || $apiKey === '') {
+                return null;
+            }
+
+            $apiUrl = (string) ($config['api_url'] ?? OpenAISpeechToText::DEFAULT_API_URL);
+            $model = (string) ($config['model'] ?? OpenAISpeechToText::DEFAULT_MODEL);
+            $language = $config['language'] ?? null;
+
+            if (str_contains(strtolower($apiUrl), 'groq.com')) {
+                return new GroqSpeechToText(
+                    apiKey: $apiKey,
+                    apiUrl: $apiUrl,
+                    model: $model !== '' ? $model : 'whisper-large-v3',
+                );
+            }
+
+            return new OpenAISpeechToText(
+                apiKey: $apiKey,
+                apiUrl: $apiUrl !== '' ? $apiUrl : OpenAISpeechToText::DEFAULT_API_URL,
+                model: $model !== '' ? $model : OpenAISpeechToText::DEFAULT_MODEL,
+                audioConverter: $this->makeAudioConverter($app),
+                transcodeTargetFormat: 'mp3',
+                language: is_string($language) && trim($language) !== '' ? $language : null,
+            );
+        });
+
         $this->app->singleton(TelegramService::class, function ($app) {
             $config = $app['config']->get('services.telegram');
-            $voiceConfig = $app['config']->get('services.telegram_voice', []);
 
             return new TelegramService(
                 botToken: (string) ($config['bot_token'] ?? ''),
                 webhookSecret: $config['webhook_secret'] ?? null,
                 timeout: (int) ($config['timeout'] ?? 10),
-                voiceTranscriber: new TelegramVoiceTranscriber(
-                    enabled: (bool) ($voiceConfig['enabled'] ?? false),
-                    apiKey: (string) ($voiceConfig['api_key'] ?? ''),
-                    apiUrl: (string) ($voiceConfig['api_url'] ?? 'https://api.openai.com/v1/audio/transcriptions'),
-                    model: (string) ($voiceConfig['model'] ?? 'whisper-1'),
-                    timeoutSeconds: (int) ($voiceConfig['timeout'] ?? 45),
-                    language: $voiceConfig['language'] ?? null,
-                ),
                 provider: $app->make(BaseProvider::class),
                 agent: $app->make(BaseAgent::class),
-                modelName: (string) $app['config']->get('services.ollama.model', 'llama3.2'),
+                modelName: (string) $app['config']->get('services.ollama.model', 'minimax-m2.5:cloud'),
+                speechToTextProvider: $app->make(SpeechToTextProvider::class),
                 historyLimit: (int) ($config['history_limit'] ?? 30),
             );
         });
@@ -67,5 +94,35 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         //
+    }
+
+    private function makeAudioConverter($app): ?AudioConverter
+    {
+        $ffmpegConfig = (array) $app['config']->get('talk2flow-agentic.ffmpeg', []);
+        $binaryPaths = (array) ($ffmpegConfig['binary_paths'] ?? []);
+        $ffmpegPath = trim((string) ($binaryPaths['ffmpeg'] ?? ''));
+        $ffprobePath = trim((string) ($binaryPaths['ffprobe'] ?? ''));
+
+        if (($ffmpegPath === '' || $ffprobePath === '') && $app->bound(FfmpegInstaller::class)) {
+            try {
+                $resolvedPaths = $app->make(FfmpegInstaller::class)->resolvedBinaryPaths();
+                $ffmpegPath = $ffmpegPath !== '' ? $ffmpegPath : trim((string) ($resolvedPaths['ffmpeg'] ?? ''));
+                $ffprobePath = $ffprobePath !== '' ? $ffprobePath : trim((string) ($resolvedPaths['ffprobe'] ?? ''));
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        if ($ffmpegPath === '' || $ffprobePath === '') {
+            return null;
+        }
+
+        return new AudioConverter(
+            ffmpegBinaryPath: $ffmpegPath,
+            ffprobeBinaryPath: $ffprobePath,
+            timeout: (int) ($ffmpegConfig['timeout'] ?? 120),
+            overwrite: (bool) ($ffmpegConfig['overwrite'] ?? true),
+            tempDirectory: (string) ($ffmpegConfig['temp_directory'] ?? ''),
+        );
     }
 }

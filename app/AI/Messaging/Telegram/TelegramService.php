@@ -8,6 +8,7 @@ use App\AI\Provider\AiMessage;
 use App\AI\Provider\AiRoleEnum;
 use App\AI\Provider\AiSession;
 use App\AI\Provider\BaseProvider;
+use App\AI\SpeechToText\SpeechToTextProvider;
 use RuntimeException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -22,10 +23,10 @@ class TelegramService
         private string $botToken,
         private ?string $webhookSecret,
         private int $timeout,
-        private ?TelegramVoiceTranscriber $voiceTranscriber,
         private BaseProvider $provider,
         private BaseAgent $agent,
         private string $modelName,
+        private ?SpeechToTextProvider $speechToTextProvider = null,
         private int $historyLimit = 30,
     ) {}
 
@@ -479,10 +480,6 @@ class TelegramService
 
     private function transcribeIncomingVoice(array $message): string
     {
-        if ($this->voiceTranscriber === null || ! $this->voiceTranscriber->isEnabled()) {
-            throw new RuntimeException('Voice transcription is not enabled');
-        }
-
         $voice = is_array($message['voice'] ?? null) ? $message['voice'] : null;
         $audio = is_array($message['audio'] ?? null) ? $message['audio'] : null;
         $file = $voice ?? $audio;
@@ -507,16 +504,17 @@ class TelegramService
         $downloadResponse->throw();
 
         $binary = (string) $downloadResponse->body();
-        if ($binary === '') {
-            throw new RuntimeException('Downloaded voice file is empty');
-        }
 
         $filename = basename($filePath);
         if ($filename === '' || $filename === '.' || $filename === '..') {
             $filename = is_array($voice) ? 'voice.ogg' : 'audio.bin';
         }
 
-        return $this->voiceTranscriber->transcribe($binary, $filename);
+        return $this->makeOrchestrator()->transcribeAudioBinary(
+            $binary,
+            $filename,
+            $this->resolveIncomingAudioMimeType($voice, $audio),
+        );
     }
 
     private function resolveVoiceFailureUserMessage(\Throwable $e): string
@@ -582,12 +580,33 @@ class TelegramService
             ->values()
             ->all();
 
-        $orchestrator = new Orchestrator($this->provider, $this->agent, $this->modelName);
-
-        return $orchestrator->askAi($messages, [
+        return $this->makeOrchestrator()->askAi($messages, [
             'ai_session_id' => (int) $session->id,
             'telegram_chat_id' => (string) $session->telegram_chat_id,
         ]);
+    }
+
+    private function makeOrchestrator(): Orchestrator
+    {
+        return new Orchestrator(
+            $this->provider,
+            $this->agent,
+            $this->modelName,
+            speechToTextProvider: $this->speechToTextProvider,
+        );
+    }
+
+    private function resolveIncomingAudioMimeType(?array $voice, ?array $audio): string
+    {
+        if (is_array($audio)) {
+            $mimeType = trim((string) ($audio['mime_type'] ?? ''));
+
+            if ($mimeType !== '') {
+                return $mimeType;
+            }
+        }
+
+        return is_array($voice) ? 'audio/ogg' : 'application/octet-stream';
     }
 
     private function extractTelegramMessageId(array $response): ?int
