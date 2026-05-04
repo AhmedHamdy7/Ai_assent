@@ -9,6 +9,7 @@ use App\AI\Provider\AiRoleEnum;
 use App\AI\Provider\AiSession;
 use App\AI\Provider\BaseProvider;
 use App\AI\SpeechToText\SpeechToTextProvider;
+use Illuminate\Http\Client\ConnectionException;
 use RuntimeException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -18,6 +19,9 @@ class TelegramService
     private const BASE_URL = 'https://api.telegram.org';
     private const TELEGRAM_TEXT_LIMIT = 4096;
     private const THINKING_TEXT = 'thinking...';
+    private const CHUNK_DELAY_MICROSECONDS = 1100000;
+    private const MAX_RETRIES = 3;
+    private const FALLBACK_MESSAGE = 'Something went wrong, please try again.';
 
     public function __construct(
         private string $botToken,
@@ -58,8 +62,6 @@ class TelegramService
 
     public function sendMessage(int|string $chatId, string $text, array $extra = []): array
     {
-        $text = $this->truncateForTelegram($text);
-
         return $this->call('sendMessage', array_merge([
             'chat_id' => $chatId,
             'text' => $text,
@@ -76,8 +78,6 @@ class TelegramService
 
     public function editMessageText(int|string $chatId, int $messageId, string $text, array $extra = []): array
     {
-        $text = $this->truncateForTelegram($text);
-
         return $this->call('editMessageText', array_merge([
             'chat_id' => $chatId,
             'message_id' => $messageId,
@@ -353,7 +353,7 @@ class TelegramService
                 $extra['reply_to_message_id'] = $replyToMessageId;
             }
 
-            $response = $this->sendMessage($chatId, self::THINKING_TEXT, $extra);
+            $response = $this->sendPlainMessage($chatId, self::THINKING_TEXT, $extra);
 
             return $this->extractTelegramMessageId($response);
         } catch (\Throwable $e) {
@@ -373,28 +373,30 @@ class TelegramService
 
         $reply = $this->formatAssistantReply($reply);
 
-        if ($targetMessageId !== null) {
-            try {
-                $response = $this->editMessageText($chatId, $targetMessageId, $reply);
-                $messageId = $this->extractTelegramMessageId($response);
-                if ($messageId !== null) {
-                    $targetMessageId = $messageId;
-                }
+        try {
+            if ($targetMessageId !== null) {
+                $messageIds = $this->editRenderedMessageWithMessageIds($chatId, $targetMessageId, $reply);
+                $targetMessageId = $messageIds[0] ?? $targetMessageId;
 
                 return $reply;
-            } catch (\Throwable $e) {
-                Log::warning('telegram.edit_reply_failed', [
-                    'chat_id' => $chatId,
-                    'message_id' => $targetMessageId,
-                    'error' => $e->getMessage(),
-                ]);
             }
+
+            $messageIds = $this->sendRenderedMessageWithMessageIds($chatId, $reply);
+            $targetMessageId = $messageIds[0] ?? null;
+
+            return $reply;
+        } catch (\Throwable $e) {
+            Log::warning('telegram.edit_reply_failed', [
+                'chat_id' => $chatId,
+                'message_id' => $targetMessageId,
+                'error' => $e->getMessage(),
+            ]);
         }
 
-        $response = $this->sendMessage($chatId, $reply);
+        $response = $this->sendPlainMessage($chatId, self::FALLBACK_MESSAGE);
         $targetMessageId = $this->extractTelegramMessageId($response);
 
-        return $reply;
+        return self::FALLBACK_MESSAGE;
     }
 
     private function formatAssistantReply(string $reply): string
@@ -659,20 +661,265 @@ class TelegramService
         return mb_substr($text, 0, self::TELEGRAM_TEXT_LIMIT - 1) . '...';
     }
 
+    /**
+     * @return list<int>
+     */
+    private function sendRenderedMessageWithMessageIds(int|string $chatId, string $text): array
+    {
+        $messageIds = [];
+        $chunks = $this->toHtmlChunks($text);
+
+        foreach ($chunks as $index => $chunk) {
+            if ($index > 0) {
+                usleep(self::CHUNK_DELAY_MICROSECONDS);
+            }
+
+            $response = $this->withRetry(fn () => $this->postHtmlWithFallback('sendMessage', [
+                'chat_id' => $chatId,
+                'text' => $chunk,
+            ]));
+
+            $messageId = $this->extractTelegramMessageId($response);
+            if ($messageId !== null) {
+                $messageIds[] = $messageId;
+            }
+        }
+
+        return $messageIds;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function editRenderedMessageWithMessageIds(int|string $chatId, int $messageId, string $text): array
+    {
+        $messageIds = [$messageId];
+        $chunks = $this->toHtmlChunks($text);
+        $firstChunk = $chunks[0] ?? '';
+
+        $this->withRetry(fn () => $this->postHtmlWithFallback('editMessageText', [
+            'chat_id' => $chatId,
+            'message_id' => $messageId,
+            'text' => $firstChunk,
+        ], isEdit: true));
+
+        foreach (array_slice($chunks, 1) as $chunk) {
+            usleep(self::CHUNK_DELAY_MICROSECONDS);
+
+            $response = $this->withRetry(fn () => $this->postHtmlWithFallback('sendMessage', [
+                'chat_id' => $chatId,
+                'text' => $chunk,
+            ]));
+
+            $overflowMessageId = $this->extractTelegramMessageId($response);
+            if ($overflowMessageId !== null) {
+                $messageIds[] = $overflowMessageId;
+            }
+        }
+
+        return $messageIds;
+    }
+
+    private function postHtmlWithFallback(string $method, array $payload, bool $isEdit = false): array
+    {
+        try {
+            return $this->telegramRequest($method, array_merge($payload, [
+                'parse_mode' => 'HTML',
+            ]));
+        } catch (TelegramApiException $e) {
+            if ($isEdit && $e->isNotModified()) {
+                return ['ok' => true, 'result' => ['message_id' => $payload['message_id'] ?? null]];
+            }
+
+            if (! $e->isParseError()) {
+                throw $e;
+            }
+
+            $plainPayload = $payload;
+            $plainPayload['text'] = $this->truncateForTelegram($this->stripHtmlTags((string) ($payload['text'] ?? '')));
+
+            return $this->telegramRequest($method, $plainPayload);
+        }
+    }
+
+    private function withRetry(callable $callback): array
+    {
+        $lastException = null;
+
+        for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
+            try {
+                return $callback();
+            } catch (TelegramApiException $e) {
+                $lastException = $e;
+
+                if (! $e->isRetryable() || $attempt === self::MAX_RETRIES) {
+                    throw $e;
+                }
+
+                sleep($e->errorCode() === 429 && $e->retryAfter() !== null ? $e->retryAfter() : $attempt * 2);
+            } catch (ConnectionException $e) {
+                $lastException = $e;
+
+                if ($attempt === self::MAX_RETRIES) {
+                    throw $e;
+                }
+
+                sleep($attempt * 2);
+            }
+        }
+
+        throw $lastException ?? new RuntimeException('Telegram request failed.');
+    }
+
+    private function sendPlainMessage(int|string $chatId, string $text, array $extra = []): array
+    {
+        return $this->call('sendMessage', array_merge([
+            'chat_id' => $chatId,
+            'text' => $this->truncateForTelegram($text),
+        ], $extra));
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function toHtmlChunks(string $text): array
+    {
+        $text = trim($text);
+        $paragraphs = preg_split('/\n{2,}/u', $text);
+        $chunks = [];
+        $buffer = '';
+
+        foreach ($paragraphs ?: [''] as $paragraph) {
+            $html = $this->markdownToHtml((string) $paragraph);
+            $separator = $buffer === '' ? '' : "\n\n";
+
+            if ($this->telegramLength($buffer . $separator . $html) > self::TELEGRAM_TEXT_LIMIT) {
+                if ($buffer !== '') {
+                    $chunks[] = $buffer;
+                    $buffer = '';
+                }
+
+                if ($this->telegramLength($html) > self::TELEGRAM_TEXT_LIMIT) {
+                    $this->hardSplitInto($html, $chunks);
+                } else {
+                    $buffer = $html;
+                }
+            } else {
+                $buffer .= $separator . $html;
+            }
+        }
+
+        if ($buffer !== '') {
+            $chunks[] = $buffer;
+        }
+
+        return $chunks !== [] ? $chunks : [''];
+    }
+
+    /**
+     * @param list<string> $chunks
+     */
+    private function hardSplitInto(string $text, array &$chunks): void
+    {
+        while ($this->telegramLength($text) > self::TELEGRAM_TEXT_LIMIT) {
+            $head = mb_substr($text, 0, self::TELEGRAM_TEXT_LIMIT);
+            $splitAt = mb_strrpos($head, "\n");
+
+            if ($splitAt === false || $splitAt <= 0) {
+                $splitAt = self::TELEGRAM_TEXT_LIMIT;
+            }
+
+            $chunks[] = mb_substr($text, 0, $splitAt);
+            $text = ltrim(mb_substr($text, $splitAt));
+        }
+
+        if ($text !== '') {
+            $chunks[] = $text;
+        }
+    }
+
+    private function markdownToHtml(string $text): string
+    {
+        $codeBlocks = [];
+        $inlineCodes = [];
+
+        $text = preg_replace_callback('/```(\w*)\n?([\s\S]*?)```/u', function (array $matches) use (&$codeBlocks): string {
+            $language = (string) ($matches[1] ?? '');
+            $body = $this->escapeHtml((string) ($matches[2] ?? ''));
+            $tag = $language !== ''
+                ? "<pre><code class=\"language-{$language}\">{$body}</code></pre>"
+                : "<pre><code>{$body}</code></pre>";
+
+            $codeBlocks[] = $tag;
+
+            return "\x00" . (count($codeBlocks) - 1) . "\x00";
+        }, $text) ?? $text;
+
+        $text = preg_replace_callback('/`([^`\n]+)`/u', function (array $matches) use (&$inlineCodes): string {
+            $inlineCodes[] = '<code>' . $this->escapeHtml((string) ($matches[1] ?? '')) . '</code>';
+
+            return "\x01" . (count($inlineCodes) - 1) . "\x01";
+        }, $text) ?? $text;
+
+        $text = $this->escapeHtml($text);
+        $text = preg_replace('/^#{1,3} +(.+)$/mu', '<b>$1</b>', $text) ?? $text;
+        $text = preg_replace('/\[([^\]\n]+)\]\((https?:\/\/[^\)\n]+)\)/u', '<a href="$2">$1</a>', $text) ?? $text;
+        $text = preg_replace('/\*\*(.+?)\*\*/u', '<b>$1</b>', $text) ?? $text;
+        $text = preg_replace('/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/u', '<i>$1</i>', $text) ?? $text;
+        $text = preg_replace('/(?<!\w)_([^_\n]+)_(?!\w)/u', '<i>$1</i>', $text) ?? $text;
+        $text = preg_replace('/~~(.+?)~~/u', '<s>$1</s>', $text) ?? $text;
+
+        $text = preg_replace_callback('/\x01(\d+)\x01/u', fn (array $matches): string => $inlineCodes[(int) $matches[1]] ?? '', $text) ?? $text;
+        $text = preg_replace_callback('/\x00(\d+)\x00/u', fn (array $matches): string => $codeBlocks[(int) $matches[1]] ?? '', $text) ?? $text;
+
+        return $text;
+    }
+
+    private function escapeHtml(string $text): string
+    {
+        return strtr($text, [
+            '&' => '&amp;',
+            '<' => '&lt;',
+            '>' => '&gt;',
+        ]);
+    }
+
+    private function stripHtmlTags(string $html): string
+    {
+        return html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+
+    private function telegramLength(string $text): int
+    {
+        return (int) (strlen(mb_convert_encoding($text, 'UTF-16', 'UTF-8')) / 2);
+    }
+
     private function call(string $method, array $payload = []): array
+    {
+        return $this->telegramRequest($method, $payload);
+    }
+
+    private function telegramRequest(string $method, array $payload = []): array
     {
         $response = Http::timeout($this->timeout)
             ->asJson()
             ->post(self::BASE_URL . "/bot{$this->botToken}/{$method}", $payload);
 
-        $response->throw();
-
         $json = $response->json();
-        if (!is_array($json) || ($json['ok'] ?? false) !== true) {
-            $description = is_array($json) ? ($json['description'] ?? 'Unknown Telegram API error') : 'Invalid Telegram API response';
-            throw new RuntimeException((string) $description);
+
+        if ($response->successful() && is_array($json) && ($json['ok'] ?? false) === true) {
+            return $json;
         }
 
-        return $json;
+        $description = is_array($json)
+            ? (string) ($json['description'] ?? 'Unknown Telegram API error')
+            : ((string) $response->body() !== '' ? (string) $response->body() : 'Invalid Telegram API response');
+
+        $errorCode = is_array($json) ? (int) ($json['error_code'] ?? $response->status()) : $response->status();
+        $retryAfter = is_array($json) && isset($json['parameters']['retry_after'])
+            ? (int) $json['parameters']['retry_after']
+            : null;
+
+        throw new TelegramApiException($description, $errorCode, $retryAfter);
     }
 }
