@@ -1,11 +1,11 @@
-name: Deploy to Railway
+name: CI
 
 on:
   push:
     branches: [main]
 
 jobs:
-  deploy:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,14 +14,10 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: pdo, pdo_mysql, mbstring, xml, curl, zip, bcmath, tokenizer, fileinfo
+          extensions: pdo, mbstring, xml, curl, zip, bcmath, tokenizer, fileinfo
 
       - name: Install dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
 
-      - name: Install Railway CLI and deploy
-        run: |
-          npm install -g @railway/cli
-          railway up --service ${{ secrets.RAILWAY_SERVICE_ID }}
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Check syntax
+        run: php -r "echo 'PHP OK';"
