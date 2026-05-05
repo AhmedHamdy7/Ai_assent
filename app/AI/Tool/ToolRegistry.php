@@ -17,6 +17,9 @@ use App\AI\Tool\Task\DeleteTaskTool;
 use App\AI\Tool\Task\GetTaskTool;
 use App\AI\Tool\Task\ListTasksTool;
 use App\AI\Tool\Task\UpdateTaskTool;
+use App\AI\Tool\Reminder\CreateReminderTool;
+use App\AI\Tool\Reminder\DeleteReminderTool;
+use App\AI\Tool\Reminder\ListRemindersTool;
 use App\AI\Tool\Web\FetchUrlTool;
 use App\AI\Tool\Web\WebSearchTool;
 
@@ -50,6 +53,9 @@ class ToolRegistry
             new GetLearningLessonTool(),
             new SubmitLearningQuizTool(),
             new GetLearningProgressTool(),
+            new CreateReminderTool(),
+            new ListRemindersTool(),
+            new DeleteReminderTool(),
             new WebSearchTool(
                 timeoutSeconds: $this->webSearchTimeoutSeconds,
                 maxResults: $this->webSearchMaxResults,
