@@ -41,12 +41,14 @@ class Orchestrator
             foreach ($response->toolCalls as $toolCall) {
                 $tool = $toolsByName[$toolCall->name] ?? null;
                 if ($tool === null) {
+                    $missingToolResult = ToolResult::fromPayload([
+                        'ok' => false,
+                        'message' => "Tool '{$toolCall->name}' is not registered.",
+                    ]);
+
                     $messages[] = AiMessage::tool(
                         $toolCall->name,
-                        (string) ToolResult::fromPayload([
-                            'ok' => false,
-                            'message' => "Tool '{$toolCall->name}' is not registered.",
-                        ]),
+                        $missingToolResult->toJson(),
                         $toolCall->id
                     );
 
@@ -66,7 +68,7 @@ class Orchestrator
                     ]);
                 }
 
-                $messages[] = AiMessage::tool($toolCall->name, (string) $result, $toolCall->id);
+                $messages[] = AiMessage::tool($toolCall->name, $result->toJson(), $toolCall->id);
             }
 
             if ($response->hasToolCalls() && $round >= $this->maxToolRounds) {

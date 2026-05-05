@@ -21,7 +21,7 @@ class ExpenseSummaryTool extends AbstractExpenseTool
 
     public function getDescription(): string
     {
-        return 'Generate a monthly expense summary: total spent, top category, and saving suggestion.';
+        return 'Generate a monthly expense summary with totals, top category, and a saving suggestion. Use this for overview questions, not itemized details.';
     }
 
     public function getParameters(): array

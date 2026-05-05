@@ -4,6 +4,10 @@ namespace App\AI\Tool\Web;
 
 use App\AI\Provider\ToolResult;
 use App\AI\Tool\BaseTool;
+use DOMDocument;
+use DOMElement;
+use DOMXPath;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Http;
@@ -11,9 +15,11 @@ use Illuminate\Support\Str;
 
 class WebSearchTool extends BaseTool
 {
+    private const SEARCH_URL = 'https://html.duckduckgo.com/html/';
+
     public function __construct(
-        private readonly int $timeoutSeconds = 12,
-        private readonly int $maxResults = 5,
+        private readonly int $timeoutSeconds = 15,
+        private readonly int $maxResults = 8,
     ) {}
 
     public function getName(): string
@@ -28,7 +34,8 @@ class WebSearchTool extends BaseTool
 
     public function getDescription(): string
     {
-        return 'Search the web for current information and return short result snippets with URLs.';
+        return 'Search the web using DuckDuckGo and return results with titles, URLs, and snippets. '
+            . 'Use this for current information, fact-checking, documentation discovery, and finding a source before using fetch_url.';
     }
 
     public function getParameters(): array
@@ -36,8 +43,22 @@ class WebSearchTool extends BaseTool
         return [
             'type' => 'object',
             'properties' => [
-                'query' => ['type' => 'string', 'description' => 'Search query'],
-                'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 10],
+                'query' => [
+                    'type' => 'string',
+                    'description' => 'The search query. Be specific for better results.',
+                ],
+                'maxResults' => [
+                    'type' => 'integer',
+                    'minimum' => 1,
+                    'maximum' => 20,
+                    'description' => 'Maximum number of results to return. Defaults to 8.',
+                ],
+                'limit' => [
+                    'type' => 'integer',
+                    'minimum' => 1,
+                    'maximum' => 20,
+                    'description' => 'Legacy alias for maxResults.',
+                ],
             ],
             'required' => ['query'],
             'additionalProperties' => false,
@@ -48,11 +69,14 @@ class WebSearchTool extends BaseTool
     {
         $query = trim((string) ($arguments['query'] ?? ''));
         if ($query === '') {
-            return ToolResult::fromPayload(['ok' => false, 'message' => 'query is required']);
+            return ToolResult::fromPayload([
+                'ok' => false,
+                'message' => 'Error: missing required parameter "query". Provide a search query string.',
+            ]);
         }
 
-        $limit = (int) ($arguments['limit'] ?? $this->maxResults);
-        $limit = max(1, min($limit, 10));
+        $limit = (int) ($arguments['maxResults'] ?? $arguments['limit'] ?? $this->maxResults);
+        $limit = max(1, min($limit, 20));
 
         try {
             $results = $this->searchHtmlResults($query, $limit);
@@ -64,21 +88,24 @@ class WebSearchTool extends BaseTool
             if ($results === []) {
                 $results = $this->searchInstantAnswerApi($query, $limit);
             }
-        } catch (RequestException $e) {
-            $details = trim((string) $e->response?->body());
-
+        } catch (ConnectionException $e) {
             return ToolResult::fromPayload([
                 'ok' => false,
-                'message' => $details !== ''
-                    ? 'Web search failed: ' . Str::limit($details, 300, '...')
-                    : 'Web search failed: ' . $e->getMessage(),
+                'message' => $this->describeConnectionError($e),
+                'query' => $query,
+                'results' => [],
+            ]);
+        } catch (RequestException $e) {
+            return ToolResult::fromPayload([
+                'ok' => false,
+                'message' => $this->describeRequestError($e),
                 'query' => $query,
                 'results' => [],
             ]);
         } catch (\Throwable $e) {
             return ToolResult::fromPayload([
                 'ok' => false,
-                'message' => 'Web search failed: ' . $e->getMessage(),
+                'message' => 'FAILED: Unexpected error during search: ' . $e->getMessage(),
                 'query' => $query,
                 'results' => [],
             ]);
@@ -87,8 +114,8 @@ class WebSearchTool extends BaseTool
         return ToolResult::fromPayload([
             'ok' => true,
             'message' => empty($results)
-                ? 'No web results found.'
-                : 'Found ' . count($results) . ' web result(s).',
+                ? sprintf('No results found for "%s". Try a different or broader search query.', $query)
+                : sprintf('Found %d web result(s) for "%s".', count($results), $query),
             'query' => $query,
             'results' => $results,
         ]);
@@ -98,22 +125,25 @@ class WebSearchTool extends BaseTool
     {
         $response = Http::timeout($this->timeoutSeconds)
             ->withHeaders([
-                'User-Agent' => 'HamdixBot/1.0 (+web_search)',
+                'User-Agent' => 'Mozilla/5.0 (compatible; HamdixBot/1.0; +web_search)',
                 'Accept-Language' => 'en-US,en;q=0.9',
             ])
+            ->withOptions([
+                'allow_redirects' => ['max' => 5],
+            ])
             ->asForm()
-            ->post('https://html.duckduckgo.com/html/', [
+            ->post(self::SEARCH_URL, [
                 'q' => $query,
             ]);
 
         $response->throw();
 
         $body = (string) $response->body();
-        if (str_contains($body, 'anomaly.js')) {
+        if ($body === '' || str_contains($body, 'anomaly.js')) {
             return [];
         }
 
-        return $this->extractHtmlResults($body, $limit);
+        return $this->parseHtmlResults($body, $limit);
     }
 
     private function searchBingResults(string $query, int $limit): array
@@ -153,6 +183,7 @@ class WebSearchTool extends BaseTool
         $abstractText = trim((string) Arr::get($data, 'AbstractText', ''));
         $abstractUrl = trim((string) Arr::get($data, 'AbstractURL', ''));
         $heading = trim((string) Arr::get($data, 'Heading', ''));
+
         if ($abstractText !== '' && $abstractUrl !== '') {
             $results[] = [
                 'title' => $heading !== '' ? $heading : 'Result',
@@ -190,26 +221,45 @@ class WebSearchTool extends BaseTool
         return array_slice($results, 0, $limit);
     }
 
-    private function extractHtmlResults(string $html, int $limit): array
+    private function parseHtmlResults(string $html, int $limit): array
     {
-        $results = [];
-        $pattern = '/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)<\/a>.*?(?:<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(?P<snippet_a>.*?)<\/a>|<span[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(?P<snippet_span>.*?)<\/span>)/si';
-
-        $matched = preg_match_all($pattern, $html, $matches, PREG_SET_ORDER);
-        if ($matched === false || $matched === 0) {
+        $xpath = $this->createXPath($html);
+        if ($xpath === null) {
             return [];
         }
 
-        foreach ($matches as $match) {
+        $results = [];
+
+        /** @var DOMElement $resultNode */
+        foreach ($xpath->query('//*[contains(concat(" ", normalize-space(@class), " "), " result ")]') ?: [] as $resultNode) {
             if (count($results) >= $limit) {
                 break;
             }
 
-            $url = trim(html_entity_decode((string) ($match['url'] ?? ''), ENT_QUOTES | ENT_HTML5));
-            $title = $this->cleanHtmlText((string) ($match['title'] ?? ''));
-            $snippet = $this->cleanHtmlText((string) (($match['snippet_a'] ?? '') !== '' ? $match['snippet_a'] : ($match['snippet_span'] ?? '')));
+            $titleNode = $xpath->query(
+                './/*[contains(concat(" ", normalize-space(@class), " "), " result__a ")]',
+                $resultNode
+            )?->item(0);
+
+            if (! $titleNode instanceof DOMElement) {
+                continue;
+            }
+
+            $title = $this->cleanText($titleNode->textContent ?? '');
+            $url = $this->extractUrl($titleNode->getAttribute('href'));
+            $snippetNode = $xpath->query(
+                './/*[contains(concat(" ", normalize-space(@class), " "), " result__snippet ")]',
+                $resultNode
+            )?->item(0);
+            $snippet = $snippetNode instanceof DOMElement
+                ? $this->cleanText($snippetNode->textContent ?? '')
+                : '';
 
             if ($url === '' || $title === '') {
+                continue;
+            }
+
+            if (str_starts_with($url, 'https://duckduckgo.com') || str_starts_with($url, 'http://duckduckgo.com')) {
                 continue;
             }
 
@@ -238,8 +288,8 @@ class WebSearchTool extends BaseTool
             }
 
             $url = trim((string) ($item->link ?? ''));
-            $title = $this->cleanHtmlText((string) ($item->title ?? ''));
-            $snippet = $this->cleanHtmlText((string) ($item->description ?? ''));
+            $title = $this->cleanText((string) ($item->title ?? ''));
+            $snippet = $this->cleanText((string) ($item->description ?? ''));
 
             if ($url === '' || $title === '') {
                 continue;
@@ -255,12 +305,41 @@ class WebSearchTool extends BaseTool
         return $results;
     }
 
-    private function cleanHtmlText(string $value): string
+    private function cleanText(string $value): string
     {
         $value = strip_tags(html_entity_decode($value, ENT_QUOTES | ENT_HTML5));
         $value = preg_replace('/\s+/', ' ', $value) ?? $value;
 
         return trim($value);
+    }
+
+    private function extractUrl(string $href): string
+    {
+        $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5));
+        if ($href === '') {
+            return '';
+        }
+
+        $parts = parse_url($href);
+        if (is_array($parts)) {
+            $query = [];
+            parse_str((string) ($parts['query'] ?? ''), $query);
+            $uddg = $query['uddg'] ?? null;
+
+            if (is_string($uddg) && trim($uddg) !== '') {
+                return trim($uddg);
+            }
+        }
+
+        if (str_starts_with($href, '//')) {
+            return 'https:' . $href;
+        }
+
+        if (str_starts_with($href, 'http://') || str_starts_with($href, 'https://')) {
+            return $href;
+        }
+
+        return '';
     }
 
     private function mapTopicToResult(array $topic): ?array
@@ -281,5 +360,55 @@ class WebSearchTool extends BaseTool
             'url' => $url,
             'snippet' => Str::limit($text, 280, '...'),
         ];
+    }
+
+    private function createXPath(string $html): ?DOMXPath
+    {
+        $previous = libxml_use_internal_errors(true);
+
+        try {
+            $document = new DOMDocument();
+            $loaded = $document->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+
+            if (! $loaded) {
+                return null;
+            }
+
+            return new DOMXPath($document);
+        } catch (\Throwable) {
+            return null;
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+        }
+    }
+
+    private function describeConnectionError(ConnectionException $e): string
+    {
+        $message = strtolower($e->getMessage());
+
+        if (str_contains($message, 'timed out')) {
+            return sprintf(
+                'FAILED: DuckDuckGo search timed out after %ds. The service may be slow - try again in a moment.',
+                $this->timeoutSeconds
+            );
+        }
+
+        return 'FAILED: Could not connect to DuckDuckGo. Check internet connectivity.';
+    }
+
+    private function describeRequestError(RequestException $e): string
+    {
+        $code = $e->response?->status();
+
+        if ($code === 403) {
+            return 'FAILED: DuckDuckGo blocked the request (403 Forbidden). This may be temporary rate limiting - wait a minute and try again.';
+        }
+
+        if ($code === 429) {
+            return 'FAILED: Too many search requests. Wait a minute before searching again.';
+        }
+
+        return sprintf('FAILED: Web search returned HTTP %s. Try again later.', $code ?? 'unknown');
     }
 }

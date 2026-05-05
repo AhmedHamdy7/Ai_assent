@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\AI;
 
+use App\AI\Tool\Web\FetchUrlTool;
 use App\AI\Tool\Web\WebFetchTool;
 use App\AI\Tool\Web\WebSearchTool;
 use Illuminate\Http\Client\Request;
@@ -14,7 +15,7 @@ class WebToolTest extends TestCase
     {
         Http::fake([
             'https://html.duckduckgo.com/html/' => Http::response(
-                '<html><body><a class="result__a" href="https://example.com/docker">Docker Guide</a><span class="result__snippet">Learn Docker basics fast.</span></body></html>',
+                '<html><body><div class="result"><a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fdocker">Docker Guide</a><span class="result__snippet">Learn Docker basics fast.</span></div></body></html>',
                 200,
                 ['Content-Type' => 'text/html']
             ),
@@ -30,6 +31,29 @@ class WebToolTest extends TestCase
         $this->assertSame('Docker Guide', $payload['results'][0]['title']);
         $this->assertSame('https://example.com/docker', $payload['results'][0]['url']);
         Http::assertSent(fn (Request $request) => $request->url() === 'https://html.duckduckgo.com/html/');
+    }
+
+    public function test_fetch_url_reads_html_and_removes_layout_noise(): void
+    {
+        Http::fake([
+            'https://example.com/article' => Http::response(
+                '<html><body><header>Navigation</header><main><h1>Docker Guide</h1><p>Useful content.</p></main><script>console.log("ignore")</script></body></html>',
+                200,
+                ['Content-Type' => 'text/html; charset=UTF-8']
+            ),
+        ]);
+
+        $tool = new FetchUrlTool();
+        $payload = $tool->execute([
+            'url' => 'https://example.com/article',
+            'maxLength' => 500,
+        ])->payload;
+
+        $this->assertTrue($payload['ok']);
+        $this->assertStringContainsString('Docker Guide', $payload['content']);
+        $this->assertStringContainsString('Useful content.', $payload['content']);
+        $this->assertStringNotContainsString('Navigation', $payload['content']);
+        $this->assertStringNotContainsString('console.log', $payload['content']);
     }
 
     public function test_web_search_falls_back_to_instant_answer_api(): void

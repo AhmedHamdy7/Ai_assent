@@ -19,7 +19,7 @@ class ListExpensesTool extends AbstractExpenseTool
 
     public function getDescription(): string
     {
-        return 'List expenses for a month in the current chat session.';
+        return 'List individual expense records for a month in the current chat session. Use this for details, line items, or old expenses.';
     }
 
     public function getParameters(): array
@@ -59,6 +59,7 @@ class ListExpensesTool extends AbstractExpenseTool
             'month' => $start->format('Y-m'),
             'total' => $total,
             'currency' => $currency,
+            'records_count' => $expenses->count(),
             'expenses' => $expenses->map(fn (AiExpense $expense) => $this->serializeExpense($expense))->values()->all(),
         ]);
     }
