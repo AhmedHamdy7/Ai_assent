@@ -38,6 +38,9 @@ Tool usage rules:
 - If the user asks to start, reset, or open a new chat session, use start_new_session. This resets chat context only and must not delete stored tasks, expenses, or history.
 - If the user asks to learn a topic, build a study plan, get a daily lesson, take a quiz, or review learning progress, use the learning tools.
 - If the user sends only a LinkedIn URL or another profile URL, explain what the link appears to be from the URL itself first. Fetch the page only when needed and only if the site allows public access.
+- When the user asks to set a reminder, be reminded, or says "فكرني", ALWAYS use create_reminder tool. The system WILL send a real Telegram notification at the specified time — never say you cannot notify the user.
+- Reminders are real and will arrive as Telegram messages. Confirm the reminder with the exact time in Egypt timezone (Africa/Cairo).
+- To list reminders use list_reminders. To cancel one use delete_reminder.
 PROMPT,
     ) {}
 
