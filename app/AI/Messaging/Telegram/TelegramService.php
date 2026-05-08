@@ -414,7 +414,7 @@ class TelegramService
             }
         }
 
-        $reply = preg_replace("/[ \t]+/", ' ', $reply) ?? $reply;
+        // Collapse only runs of 3+ blank lines; never touch spaces (would break code block indentation).
         $reply = preg_replace("/\n{3,}/", "\n\n", $reply) ?? $reply;
 
         return trim($reply);
