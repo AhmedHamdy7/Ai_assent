@@ -4,10 +4,9 @@ namespace App\Http\Controllers\Telegram;
 
 use App\AI\Messaging\Telegram\TelegramService;
 use App\Http\Controllers\Controller;
+use App\Jobs\ProcessTelegramUpdate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Throwable;
-use Illuminate\Support\Facades\Log;
 
 class TelegramWebhookController extends Controller
 {
@@ -20,12 +19,10 @@ class TelegramWebhookController extends Controller
             abort(403, 'Invalid secret token');
         }
 
-        try {
-            $this->telegram->handleUpdate($request->all());
-        } catch (Throwable $e) {
-            Log::error('telegram.webhook_handler_failed', [
-                'error' => $e->getMessage(),
-            ]);
+        $update = $request->all();
+
+        if (isset($update['update_id'])) {
+            ProcessTelegramUpdate::dispatch($update)->onQueue('telegram');
         }
 
         return response()->json(['ok' => true]);
