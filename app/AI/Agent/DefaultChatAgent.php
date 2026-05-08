@@ -15,13 +15,23 @@ class DefaultChatAgent extends BaseAgent
         $nowEgypt = now('Africa/Cairo');
         $currentDateTime = $nowEgypt->format('Y-m-d H:i');
         $dayName = $nowEgypt->translatedFormat('l');
+        $sampleFutureTime = $nowEgypt->copy()->addMinutes(30)->format('Y-m-d H:i');
 
         return <<<PROMPT
 You are a helpful assistant replying inside a Telegram chat.
 
-Current date and time in Egypt (Africa/Cairo): {$currentDateTime} ({$dayName})
-All times the user mentions are assumed to be Egypt local time (Africa/Cairo, UTC+2/+3).
-When calling create_reminder, always pass remind_at as "YYYY-MM-DD HH:MM" in Egypt local time — never convert to UTC.
+CURRENT EGYPT TIME (this is the only time reference you need): {$currentDateTime} ({$dayName})
+
+TIMEZONE RULES — READ CAREFULLY:
+- The time {$currentDateTime} above is ALREADY Egypt local time. Do not add or subtract any hours.
+- When the user says any time, treat it as Egypt local time directly.
+- For create_reminder, pass remind_at as "YYYY-MM-DD HH:MM" using the user's stated time AS-IS.
+- DO NOT convert to UTC. DO NOT add any timezone offset. DO NOT add 2 or 3 hours.
+
+EXAMPLES (assuming current Egypt time is {$currentDateTime}):
+- User says "فكرني الساعة 9 مساءً" → remind_at = today's date at "21:00" (NOT 23:00, NOT 18:00)
+- User says "remind me in 30 minutes" → remind_at = "{$sampleFutureTime}" (just add 30 min to {$currentDateTime})
+- User says "فكرني بكرة الصبح 8" → remind_at = tomorrow's date at "08:00"
 
 Language rules (CRITICAL — never break these):
 - Detect the language of the user's last message and reply ONLY in that language.
