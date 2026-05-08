@@ -55,6 +55,7 @@ class OllamaProvider extends BaseProvider
         try {
             $response = Http::withToken($this->apiKey)
                 ->timeout($this->timeout)
+                ->connectTimeout(10)
                 ->post($this->apiUrl, $body);
 
             $response->throw();

@@ -22,6 +22,7 @@ class TelegramService
     private const CHUNK_DELAY_MICROSECONDS = 1100000;
     private const MAX_RETRIES = 3;
     private const FALLBACK_MESSAGE = 'Something went wrong, please try again.';
+    private const CHAT_ACTION_TIMEOUT = 3;
 
     public function __construct(
         private string $botToken,
@@ -342,7 +343,10 @@ class TelegramService
     private function sendThinkingPlaceholder(int|string $chatId, ?int $replyToMessageId = null): ?int
     {
         try {
-            $this->sendChatAction($chatId, 'typing');
+            $this->telegramRequest('sendChatAction', [
+                'chat_id' => $chatId,
+                'action'  => 'typing',
+            ], self::CHAT_ACTION_TIMEOUT);
         } catch (\Throwable $e) {
             Log::warning('telegram.typing_failed', ['error' => $e->getMessage()]);
         }
@@ -904,9 +908,10 @@ class TelegramService
         return $this->telegramRequest($method, $payload);
     }
 
-    private function telegramRequest(string $method, array $payload = []): array
+    private function telegramRequest(string $method, array $payload = [], ?int $timeout = null): array
     {
-        $response = Http::timeout($this->timeout)
+        $response = Http::timeout($timeout ?? $this->timeout)
+            ->connectTimeout(min(5, $timeout ?? $this->timeout))
             ->asJson()
             ->post(self::BASE_URL . "/bot{$this->botToken}/{$method}", $payload);
 
