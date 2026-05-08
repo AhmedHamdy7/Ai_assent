@@ -55,15 +55,13 @@ class SendDueRemindersCommand extends Command
                     continue;
                 }
 
-                // Message delivered — mark sent and advance or deactivate.
-                $reminder->last_sent_at = now();
-
+                // Message delivered — once reminders are removed, recurring ones advance.
                 if ($reminder->frequency === AiReminder::FREQUENCY_ONCE) {
-                    $reminder->is_active = false;
-                    $reminder->save();
+                    $reminder->delete();
                     continue;
                 }
 
+                $reminder->last_sent_at = now();
                 $reminder->remind_at = $reminder->frequency === AiReminder::FREQUENCY_DAILY
                     ? $reminder->remind_at->addDay()
                     : $reminder->remind_at->addWeek();

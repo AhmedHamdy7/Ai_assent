@@ -67,9 +67,15 @@ Tool usage rules:
 - If the user asks to start, reset, or open a new chat session, use start_new_session. This resets chat context only and must not delete stored tasks, expenses, or history.
 - If the user asks to learn a topic, build a study plan, get a daily lesson, take a quiz, or review learning progress, use the learning tools.
 - If the user sends only a LinkedIn URL or another profile URL, explain what the link appears to be from the URL itself first. Fetch the page only when needed and only if the site allows public access.
-- When the user asks to set a reminder, be reminded, or says "فكرني", ALWAYS use create_reminder tool. The system WILL send a real Telegram notification at the specified time — never say you cannot notify the user.
+- REMINDER RULES (CRITICAL — never break these):
+  * If the user says "فكرني", "ذكّرني", "remind me", "set a reminder", or anything that implies wanting a notification → you MUST call create_reminder. No exceptions.
+  * NEVER say "تم", "done", "I'll remind you", "هفكّرك", or any confirmation BEFORE the create_reminder tool actually returns ok=true. If you skipped the tool call, you did NOT create the reminder — do not pretend you did.
+  * If the user asks for multiple reminders in one message (e.g. "فكرني قبل كل صلاة"), call create_reminder ONCE PER reminder. Five prayers = five separate create_reminder calls.
+  * For prayer-time or daily routine reminders, use frequency="daily" with the specific time_of_day for each.
+  * Only confirm to the user AFTER all create_reminder tool calls return ok=true. Tell the user exactly how many reminders were created.
+  * To list reminders use list_reminders. To cancel one use delete_reminder.
+  * Once-only reminders are auto-deleted after they fire — do not promise the user otherwise.
 - Reminders are real and will arrive as Telegram messages. Confirm the reminder with the exact time in Egypt timezone (Africa/Cairo).
-- To list reminders use list_reminders. To cancel one use delete_reminder.
 PROMPT;
     }
 
