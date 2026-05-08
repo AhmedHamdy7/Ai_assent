@@ -30,8 +30,18 @@ abstract class AbstractReminderTool extends BaseTool
             return null;
         }
 
+        $value = trim($value);
+
         try {
-            return Carbon::parse($value, 'Africa/Cairo');
+            // Preferred: "YYYY-MM-DD HH:MM" — parse as Egypt local time.
+            if (preg_match('/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/', $value)) {
+                return Carbon::createFromFormat('Y-m-d H:i', substr($value, 0, 16), 'Africa/Cairo');
+            }
+
+            // Relative expressions like "+3 minutes", "+1 hour" (PHP strtotime-compatible).
+            $result = Carbon::parse($value, 'Africa/Cairo');
+
+            return $result->year >= 2000 ? $result : null;
         } catch (\Throwable) {
             return null;
         }

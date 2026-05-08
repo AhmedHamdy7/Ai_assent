@@ -25,7 +25,7 @@ class SendDueRemindersCommand extends Command
 
         foreach ($due as $reminder) {
             try {
-                Http::timeout(10)->post(
+                $response = Http::timeout(10)->post(
                     "https://api.telegram.org/bot{$botToken}/sendMessage",
                     [
                         'chat_id' => $reminder->telegram_chat_id,
@@ -33,6 +33,29 @@ class SendDueRemindersCommand extends Command
                     ]
                 );
 
+                $json     = $response->json();
+                $telegramOk = $response->successful() && ($json['ok'] ?? false) === true;
+
+                if (! $telegramOk) {
+                    $errorCode   = $json['error_code'] ?? $response->status();
+                    $description = $json['description'] ?? (string) $response->body();
+
+                    Log::error('reminders.telegram_rejected', [
+                        'reminder_id' => $reminder->id,
+                        'error_code'  => $errorCode,
+                        'description' => $description,
+                    ]);
+
+                    // Terminal errors (bot blocked, chat not found) — deactivate so we stop retrying.
+                    if ($errorCode === 403 || ($errorCode === 400 && str_contains($description, 'chat not found'))) {
+                        $reminder->is_active = false;
+                        $reminder->save();
+                    }
+
+                    continue;
+                }
+
+                // Message delivered — mark sent and advance or deactivate.
                 $reminder->last_sent_at = now();
 
                 if ($reminder->frequency === AiReminder::FREQUENCY_ONCE) {

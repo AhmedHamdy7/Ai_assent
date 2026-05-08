@@ -19,7 +19,7 @@ class CreateReminderTool extends AbstractReminderTool
 
     public function getDescription(): string
     {
-        return 'Create a reminder that will send a Telegram notification at a specific time. Supports one-time, daily, and weekly reminders.';
+        return 'Create a reminder. The system will send a real Telegram message to the user at the specified time. Always call this tool when the user asks to be reminded of anything.';
     }
 
     public function getParameters(): array
@@ -29,16 +29,16 @@ class CreateReminderTool extends AbstractReminderTool
             'properties' => [
                 'message' => [
                     'type' => 'string',
-                    'description' => 'The reminder message to send',
+                    'description' => 'The reminder text that will be sent to the user',
                 ],
                 'frequency' => [
                     'type' => 'string',
                     'enum' => [AiReminder::FREQUENCY_ONCE, AiReminder::FREQUENCY_DAILY, AiReminder::FREQUENCY_WEEKLY],
-                    'description' => 'once = single reminder, daily = every day, weekly = every week',
+                    'description' => 'once = single one-time reminder, daily = every day at the same time, weekly = every week on the same day',
                 ],
                 'remind_at' => [
                     'type' => 'string',
-                    'description' => 'For frequency=once: the exact datetime (ISO-8601 or natural language like "tomorrow at 3pm")',
+                    'description' => 'For frequency=once: the exact Egypt local datetime in "YYYY-MM-DD HH:MM" format (e.g. "2026-05-08 16:05"). Compute this from the current date/time shown in the system prompt.',
                 ],
                 'time_of_day' => [
                     'type' => 'string',
