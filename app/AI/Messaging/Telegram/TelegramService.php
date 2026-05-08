@@ -599,7 +599,12 @@ class TelegramService
         $onToolStart = null;
 
         if ($thinkingMessageId !== null) {
-            $onToolStart = function (string $eventAction) use ($chatId, $thinkingMessageId): void {
+            $lastSentAction = null;
+            $onToolStart = function (string $eventAction) use ($chatId, $thinkingMessageId, &$lastSentAction): void {
+                if ($eventAction === $lastSentAction) {
+                    return;
+                }
+                $lastSentAction = $eventAction;
                 try {
                     $this->editMessageText($chatId, $thinkingMessageId, $eventAction . '...');
                 } catch (\Throwable $e) {
