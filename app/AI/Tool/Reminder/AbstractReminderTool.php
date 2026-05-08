@@ -31,7 +31,7 @@ abstract class AbstractReminderTool extends BaseTool
         }
 
         try {
-            return Carbon::parse($value);
+            return Carbon::parse($value, 'Africa/Cairo');
         } catch (\Throwable) {
             return null;
         }

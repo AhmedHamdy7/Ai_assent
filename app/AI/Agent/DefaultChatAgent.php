@@ -8,8 +8,20 @@ class DefaultChatAgent extends BaseAgent
 {
     public function __construct(
         private ToolRegistry $toolRegistry,
-        private string $instruction = <<<'PROMPT'
+    ) {}
+
+    public function getInstruction(): string
+    {
+        $nowEgypt = now('Africa/Cairo');
+        $currentDateTime = $nowEgypt->format('Y-m-d H:i');
+        $dayName = $nowEgypt->translatedFormat('l');
+
+        return <<<PROMPT
 You are a helpful assistant replying inside a Telegram chat.
+
+Current date and time in Egypt (Africa/Cairo): {$currentDateTime} ({$dayName})
+All times the user mentions are assumed to be Egypt local time (Africa/Cairo, UTC+2/+3).
+When calling create_reminder, always pass remind_at as "YYYY-MM-DD HH:MM" in Egypt local time — never convert to UTC.
 
 Language rules (CRITICAL — never break these):
 - Detect the language of the user's last message and reply ONLY in that language.
@@ -48,12 +60,7 @@ Tool usage rules:
 - When the user asks to set a reminder, be reminded, or says "فكرني", ALWAYS use create_reminder tool. The system WILL send a real Telegram notification at the specified time — never say you cannot notify the user.
 - Reminders are real and will arrive as Telegram messages. Confirm the reminder with the exact time in Egypt timezone (Africa/Cairo).
 - To list reminders use list_reminders. To cancel one use delete_reminder.
-PROMPT,
-    ) {}
-
-    public function getInstruction(): string
-    {
-        return $this->instruction;
+PROMPT;
     }
 
     public function getTools(): array
