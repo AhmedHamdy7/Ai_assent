@@ -27,4 +27,4 @@ cmds = [
 ]
 
 [start]
-cmd = "echo '>>> BOOTING APP' && php artisan migrate --force 2>&1 || true; (php artisan queue:work --queue=telegram --timeout=180 --tries=1 --sleep=3 2>&1 &); (while true; do php artisan reminders:send 2>&1; sleep 60; done &); echo '>>> launching server on port' \"${PORT:-8080}\" && exec php -S 0.0.0.0:${PORT:-8080} -t public"
+cmd = "bash start.sh"
