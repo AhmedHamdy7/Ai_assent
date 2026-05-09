@@ -181,20 +181,23 @@
 <script>
   // Capture every JS error + unhandled rejection so we can SHOW it in the banner.
   window.__BOOT_ERRORS = [];
-  function recordError(label, err) {
+  function recordError(label, e) {
+    // Script-load errors: ErrorEvent with e.target = <script>, no .error.
+    if (e && e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) {
+      window.__BOOT_ERRORS.push(label + ' loading: ' + (e.target.src || e.target.href));
+      return;
+    }
+    var err = e && e.error ? e.error : (e && e.reason ? e.reason : e);
     var msg = '';
     if (err && err.message) msg = err.message;
     else if (typeof err === 'string') msg = err;
     else msg = String(err);
-    if (err && err.filename) msg += '  @ ' + err.filename + ':' + (err.lineno || '?') + ':' + (err.colno || '?');
+    if (e && e.filename) msg += '  @ ' + e.filename + ':' + (e.lineno || '?') + ':' + (e.colno || '?');
     window.__BOOT_ERRORS.push(label + ': ' + msg);
   }
-  window.addEventListener('error', function (e) {
-    recordError('error', e.error || e);
-  }, true);
-  window.addEventListener('unhandledrejection', function (e) {
-    recordError('promise', e.reason || e);
-  });
+  // Capture phase = true so we catch script load errors (they don't bubble).
+  window.addEventListener('error', function (e) { recordError('error', e); }, true);
+  window.addEventListener('unhandledrejection', function (e) { recordError('promise', e); });
 
   // Each JSX file registers globals on window. If a file failed to compile/eval,
   // its globals are missing — we can pinpoint which file broke.
@@ -235,6 +238,35 @@
     }
     var errors = window.__BOOT_ERRORS || [];
     if (problems.length === 0 && errors.length === 0) return;
+
+    // Probe the bundle URL to find out WHY it failed.
+    if (failed.length > 0 && window.__DASHBOARD_BUNDLE_URL) {
+      try {
+        var bres = await fetch(window.__DASHBOARD_BUNDLE_URL, { credentials: 'same-origin' });
+        if (!bres.ok) {
+          problems.push('└─ bundle returned HTTP ' + bres.status + ' — file is missing on the server. Run `npm run build:dashboard` and redeploy.');
+        } else {
+          var ctype = bres.headers.get('content-type') || '';
+          var bytes = await bres.text();
+          if (ctype.indexOf('html') !== -1 || bytes.indexOf('<html') !== -1 || bytes.indexOf('<!DOCTYPE') !== -1) {
+            problems.push('└─ bundle URL returned HTML, not JavaScript. Server is serving an error page instead of the file.');
+          } else if (bytes.length < 100) {
+            problems.push('└─ bundle is empty/tiny (' + bytes.length + ' bytes). Build did not produce output.');
+          } else {
+            problems.push('└─ bundle is ' + (bytes.length / 1024).toFixed(0) + 'kB. First line: ' + bytes.split('\n')[0].slice(0, 120));
+            // Try to evaluate it to find the actual error.
+            try {
+              new Function(bytes)();
+              problems.push('└─ bundle re-evaluated OK in this context but the original load failed. Likely CSP script-src violation — check Network tab.');
+            } catch (evalErr) {
+              problems.push('└─ bundle threw at runtime: ' + (evalErr.message || evalErr));
+            }
+          }
+        }
+      } catch (fetchErr) {
+        problems.push('└─ Could not fetch bundle: ' + (fetchErr.message || fetchErr));
+      }
+    }
 
     diag.style.display = 'block';
     var html = problems.map(function (p) { return '• ' + p; }).join('<br>');
@@ -326,7 +358,13 @@
 
 <!-- Pre-compiled bundle (no Babel-in-browser → works under strict CSP). -->
 <!-- Rebuild after editing JSX:  node build-dashboard.mjs -->
-<script src="{{ asset('dash-assets/dashboard.bundle.js') }}?v={{ filemtime(public_path('dash-assets/dashboard.bundle.js')) }}"></script>
+@php
+  $bundlePath = public_path('dash-assets/dashboard.bundle.js');
+  $bundleVersion = file_exists($bundlePath) ? filemtime($bundlePath) : 'missing';
+  $bundleUrl = asset('dash-assets/dashboard.bundle.js') . '?v=' . $bundleVersion;
+@endphp
+<script>window.__DASHBOARD_BUNDLE_URL = @json($bundleUrl);</script>
+<script src="{{ $bundleUrl }}"></script>
 
 </body>
 </html>
