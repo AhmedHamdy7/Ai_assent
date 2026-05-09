@@ -100,8 +100,8 @@ function TelegramConsole() {
     }
   };
 
-  const send = async () => {
-    const text = draft.trim();
+  const sendText = async (text) => {
+    text = (text || '').trim();
     if (!text || sending) return;
     setSending(true);
     setError(null);
@@ -128,14 +128,12 @@ function TelegramConsole() {
       if (!res.ok || !data.ok) {
         throw new Error(data.message || `HTTP ${res.status}`);
       }
-      // Replace optimistic with real user message + add assistant
       setMessages(m => {
         const next = m.filter(x => x.id !== optimistic.id);
         if (data.user_message) next.push(data.user_message);
         if (data.assistant_message) next.push(data.assistant_message);
         return next;
       });
-      // If this was a brand-new session, set the id and add to list
       if (!selectedId && data.session_id) {
         setSelectedId(data.session_id);
         setAllChats(c => {
@@ -153,7 +151,6 @@ function TelegramConsole() {
           }, ...c];
         });
       } else {
-        // Bump existing chat preview
         setAllChats(c => c.map(x => x.id === selectedId ? {
           ...x,
           last: data.assistant_message?.text?.slice(0, 60) || x.last,
@@ -164,13 +161,14 @@ function TelegramConsole() {
       }
     } catch (e) {
       setError(e.message || 'Failed to send');
-      // Remove optimistic on error
       setMessages(m => m.filter(x => x.id !== optimistic.id));
-      setDraft(text); // restore draft
+      setDraft(text);
     } finally {
       setSending(false);
     }
   };
+
+  const send = () => sendText(draft);
 
   const onComposerKey = (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -271,8 +269,18 @@ function TelegramConsole() {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || `HTTP ${res.status}`);
-      // Append to existing draft instead of replacing — user can review and edit
-      setDraft(d => (d.trim() ? d.trim() + ' ' : '') + data.text);
+      const transcript = (data.text || '').trim();
+      if (!transcript) {
+        setError('Transcription returned empty text.');
+        return;
+      }
+      setTranscribing(false);
+      // If draft already has text, append + focus. Otherwise auto-send the voice message.
+      if (draft.trim()) {
+        setDraft(d => (d.trim() + ' ' + transcript));
+      } else {
+        await sendText(transcript);
+      }
     } catch (e) {
       setError('Transcription failed: ' + (e.message || e));
     } finally {

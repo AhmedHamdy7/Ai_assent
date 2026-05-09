@@ -179,7 +179,24 @@
 </div>
 
 <script>
-  // Fail-loud: if React or Babel didn't load in 6s, show what's missing.
+  // Capture every JS error + unhandled rejection so we can SHOW it in the banner.
+  window.__BOOT_ERRORS = [];
+  function recordError(label, err) {
+    var msg = '';
+    if (err && err.message) msg = err.message;
+    else if (typeof err === 'string') msg = err;
+    else msg = String(err);
+    if (err && err.filename) msg += '  @ ' + err.filename + ':' + (err.lineno || '?') + ':' + (err.colno || '?');
+    window.__BOOT_ERRORS.push(label + ': ' + msg);
+  }
+  window.addEventListener('error', function (e) {
+    recordError('error', e.error || e);
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    recordError('promise', e.reason || e);
+  });
+
+  // Fail-loud: if React didn't mount in 6s, show what's missing + the actual errors.
   window.__BOOT_TIMER = setTimeout(function () {
     var diag = document.getElementById('boot-diag');
     var msg  = document.getElementById('boot-diag-msg');
@@ -190,13 +207,21 @@
     if (typeof Babel === 'undefined') problems.push('Babel did not load');
     if (typeof tailwind === 'undefined') problems.push('Tailwind Play CDN did not load');
     var root = document.getElementById('root');
-    if (problems.length === 0 && root && !root.firstChild) {
-      problems.push('Scripts loaded but React did not mount. Open DevTools console for the actual error.');
+    var notMounted = root && !root.firstChild;
+    if (problems.length === 0 && notMounted) {
+      problems.push('Scripts loaded but React did not mount.');
     }
-    if (problems.length === 0) return; // all good
+    var errors = window.__BOOT_ERRORS || [];
+    if (problems.length === 0 && errors.length === 0) return; // all good
     diag.style.display = 'block';
-    msg.innerHTML = problems.map(function (p) { return '• ' + p; }).join('<br>') +
-      '<br><br><span style="color:rgba(255,255,255,0.5)">Most common cause on production: <code>cdn.tailwindcss.com</code> rate-limit or <code>unpkg.com</code> blocked. Check Network tab in DevTools.</span>';
+    var html = problems.map(function (p) { return '• ' + p; }).join('<br>');
+    if (errors.length > 0) {
+      html += '<br><br><span style="color:rgba(255,255,255,0.85);font-weight:600">Captured errors:</span><br>';
+      html += errors.slice(0, 6).map(function (e) {
+        return '<span style="color:rgba(255,255,255,0.75)">• ' + e.replace(/[<>&]/g, function (c) { return ({'<':'&lt;','>':'&gt;','&':'&amp;'})[c]; }) + '</span>';
+      }).join('<br>');
+    }
+    msg.innerHTML = html;
   }, 6000);
 </script>
 
