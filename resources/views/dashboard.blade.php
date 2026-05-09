@@ -196,23 +196,70 @@
     recordError('promise', e.reason || e);
   });
 
-  // Fail-loud: if React didn't mount in 6s, show what's missing + the actual errors.
-  window.__BOOT_TIMER = setTimeout(function () {
+  // Each JSX file registers globals on window. If a file failed to compile/eval,
+  // its globals are missing — we can pinpoint which file broke.
+  window.__JSX_CHECKS = [
+    { file: 'lib.jsx',       global: 'fmt'             },
+    { file: 'icons.jsx',     global: 'Icon'            },
+    { file: 'widgets.jsx',   global: 'Pill'            },
+    { file: 'screens-1.jsx', global: 'CommandCenter'   },
+    { file: 'screens-2.jsx', global: 'TelegramConsole' },
+    { file: 'screens-3.jsx', global: 'ApiPlayground'   },
+    { file: 'shell.jsx',     global: 'Sidebar'         },
+    { file: 'tweaks-panel.jsx', global: 'TweaksPanel'  },
+  ];
+
+  // Fail-loud: if React didn't mount in 7s, show what's missing + actual errors.
+  window.__BOOT_TIMER = setTimeout(async function () {
     var diag = document.getElementById('boot-diag');
     var msg  = document.getElementById('boot-diag-msg');
     if (!diag || !msg) return;
     var problems = [];
-    if (typeof React === 'undefined') problems.push('React did not load (CDN blocked or slow)');
+    if (typeof React === 'undefined') problems.push('React did not load (CDN blocked)');
     if (typeof ReactDOM === 'undefined') problems.push('ReactDOM did not load');
     if (typeof Babel === 'undefined') problems.push('Babel did not load');
     if (typeof tailwind === 'undefined') problems.push('Tailwind Play CDN did not load');
+
+    // Which JSX file(s) failed to register their globals?
+    var failed = [];
+    window.__JSX_CHECKS.forEach(function (c) {
+      if (typeof window[c.global] === 'undefined') failed.push(c.file);
+    });
+    if (failed.length > 0) {
+      problems.push('JSX files failed to compile/eval: ' + failed.join(', '));
+    }
+
     var root = document.getElementById('root');
     var notMounted = root && !root.firstChild;
     if (problems.length === 0 && notMounted) {
       problems.push('Scripts loaded but React did not mount.');
     }
     var errors = window.__BOOT_ERRORS || [];
-    if (problems.length === 0 && errors.length === 0) return; // all good
+    if (problems.length === 0 && errors.length === 0) return;
+
+    // Probe the first failing JSX file to find out WHY: HTTP error? CSP? Babel compile error?
+    if (failed.length > 0) {
+      var path = 'dash-assets/' + (failed[0] === 'tweaks-panel.jsx' ? 'tweaks-panel.jsx' : 'src/' + failed[0]);
+      try {
+        var res = await fetch(path, { credentials: 'same-origin' });
+        if (!res.ok) {
+          problems.push('└─ ' + path + ' returned HTTP ' + res.status);
+        } else {
+          var src = await res.text();
+          if (typeof Babel !== 'undefined') {
+            try {
+              Babel.transform(src, { presets: ['react'] });
+              problems.push('└─ ' + path + ' compiles OK but did not execute. Likely CSP blocked eval (Content-Security-Policy: unsafe-eval missing).');
+            } catch (compileErr) {
+              problems.push('└─ ' + path + ' Babel compile error: ' + (compileErr.message || compileErr));
+            }
+          }
+        }
+      } catch (fetchErr) {
+        problems.push('└─ Could not fetch ' + path + ': ' + (fetchErr.message || fetchErr));
+      }
+    }
+
     diag.style.display = 'block';
     var html = problems.map(function (p) { return '• ' + p; }).join('<br>');
     if (errors.length > 0) {
@@ -222,7 +269,7 @@
       }).join('<br>');
     }
     msg.innerHTML = html;
-  }, 6000);
+  }, 7000);
 </script>
 
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
