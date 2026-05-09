@@ -217,16 +217,15 @@
     var problems = [];
     if (typeof React === 'undefined') problems.push('React did not load (CDN blocked)');
     if (typeof ReactDOM === 'undefined') problems.push('ReactDOM did not load');
-    if (typeof Babel === 'undefined') problems.push('Babel did not load');
     if (typeof tailwind === 'undefined') problems.push('Tailwind Play CDN did not load');
 
-    // Which JSX file(s) failed to register their globals?
+    // Which globals failed to register? (Bundle should set these.)
     var failed = [];
     window.__JSX_CHECKS.forEach(function (c) {
       if (typeof window[c.global] === 'undefined') failed.push(c.file);
     });
     if (failed.length > 0) {
-      problems.push('JSX files failed to compile/eval: ' + failed.join(', '));
+      problems.push('Bundle did not register: ' + failed.join(', '));
     }
 
     var root = document.getElementById('root');
@@ -236,29 +235,6 @@
     }
     var errors = window.__BOOT_ERRORS || [];
     if (problems.length === 0 && errors.length === 0) return;
-
-    // Probe the first failing JSX file to find out WHY: HTTP error? CSP? Babel compile error?
-    if (failed.length > 0) {
-      var path = 'dash-assets/' + (failed[0] === 'tweaks-panel.jsx' ? 'tweaks-panel.jsx' : 'src/' + failed[0]);
-      try {
-        var res = await fetch(path, { credentials: 'same-origin' });
-        if (!res.ok) {
-          problems.push('└─ ' + path + ' returned HTTP ' + res.status);
-        } else {
-          var src = await res.text();
-          if (typeof Babel !== 'undefined') {
-            try {
-              Babel.transform(src, { presets: ['react'] });
-              problems.push('└─ ' + path + ' compiles OK but did not execute. Likely CSP blocked eval (Content-Security-Policy: unsafe-eval missing).');
-            } catch (compileErr) {
-              problems.push('└─ ' + path + ' Babel compile error: ' + (compileErr.message || compileErr));
-            }
-          }
-        }
-      } catch (fetchErr) {
-        problems.push('└─ Could not fetch ' + path + ': ' + (fetchErr.message || fetchErr));
-      }
-    }
 
     diag.style.display = 'block';
     var html = problems.map(function (p) { return '• ' + p; }).join('<br>');
@@ -274,7 +250,6 @@
 
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
 <script>
   // CDN fallback: if unpkg failed, try jsdelivr.
   (function () {
@@ -289,7 +264,6 @@
     var todo = [];
     if (typeof React === 'undefined') todo.push('https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js');
     if (typeof ReactDOM === 'undefined') todo.push('https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js');
-    if (typeof Babel === 'undefined') todo.push('https://cdn.jsdelivr.net/npm/@babel/standalone@7.29.0/babel.min.js');
     todo.forEach(function (src) { load(src); });
   })();
 </script>
@@ -350,15 +324,9 @@
   window.__DASH_NEW_SESSION_URL = "{{ url('/dashboard/sessions/new') }}";
 </script>
 
-<script type="text/babel" src="{{ asset('dash-assets/src/lib.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dash-assets/src/icons.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dash-assets/src/widgets.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dash-assets/src/screens-1.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dash-assets/src/screens-2.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dash-assets/src/screens-3.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dash-assets/src/shell.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dashboard/tweaks-panel.jsx') }}"></script>
-<script type="text/babel" src="{{ asset('dash-assets/src/app.jsx') }}"></script>
+<!-- Pre-compiled bundle (no Babel-in-browser → works under strict CSP). -->
+<!-- Rebuild after editing JSX:  node build-dashboard.mjs -->
+<script src="{{ asset('dash-assets/dashboard.bundle.js') }}?v={{ filemtime(public_path('dash-assets/dashboard.bundle.js')) }}"></script>
 
 </body>
 </html>

@@ -15,13 +15,18 @@ nixPkgs = [
     "php83Extensions.pcntl",
     "bash",
     "coreutils",
+    "nodejs_22",
 ]
 
 [phases.install]
-cmds = ["composer install --no-dev --optimize-autoloader --no-interaction"]
+cmds = [
+    "composer install --no-dev --optimize-autoloader --no-interaction",
+    "npm ci || npm install",
+]
 
 [phases.build]
 cmds = [
+    "npm run build:dashboard",
     "php artisan route:cache",
     "php artisan view:cache",
 ]
