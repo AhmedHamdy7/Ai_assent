@@ -14,6 +14,17 @@ return Application::configure(basePath: dirname(__DIR__))
         __DIR__.'/../app/AI/Command',
     ])
     ->withMiddleware(function (Middleware $middleware): void {
+        // Railway / Cloudflare / nginx all sit in front of the app. Without
+        // this, asset() / url() return http:// and Laravel can't see the
+        // original https:// request — causing mixed-content failures.
+        $middleware->trustProxies(at: '*', headers:
+            \Illuminate\Http\Request::HEADER_X_FORWARDED_FOR
+            | \Illuminate\Http\Request::HEADER_X_FORWARDED_HOST
+            | \Illuminate\Http\Request::HEADER_X_FORWARDED_PORT
+            | \Illuminate\Http\Request::HEADER_X_FORWARDED_PROTO
+            | \Illuminate\Http\Request::HEADER_X_FORWARDED_AWS_ELB
+        );
+
         $middleware->validateCsrfTokens(except: [
             'telegram/webhook',
             'telegram/webhook/*',

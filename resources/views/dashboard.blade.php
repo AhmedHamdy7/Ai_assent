@@ -359,9 +359,11 @@
 <!-- Pre-compiled bundle (no Babel-in-browser → works under strict CSP). -->
 <!-- Rebuild after editing JSX:  node build-dashboard.mjs -->
 @php
+  // Use a root-relative path so the browser inherits the page's scheme (https)
+  // — avoids mixed-content errors when behind a proxy that terminates TLS.
   $bundlePath = public_path('dash-assets/dashboard.bundle.js');
   $bundleVersion = file_exists($bundlePath) ? filemtime($bundlePath) : 'missing';
-  $bundleUrl = asset('dash-assets/dashboard.bundle.js') . '?v=' . $bundleVersion;
+  $bundleUrl = '/dash-assets/dashboard.bundle.js?v=' . $bundleVersion;
 @endphp
 <script>window.__DASHBOARD_BUNDLE_URL = @json($bundleUrl);</script>
 <script src="{{ $bundleUrl }}"></script>
