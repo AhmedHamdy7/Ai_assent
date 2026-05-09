@@ -8,6 +8,7 @@ use App\AI\Provider\AiMessage;
 use App\AI\Provider\AiRoleEnum;
 use App\AI\Provider\AiSession;
 use App\AI\Provider\BaseProvider;
+use App\AI\SpeechToText\SpeechToTextProvider;
 use App\AI\Tool\ToolRegistry;
 use App\Models\AiExpense;
 use App\Models\AiLearningLesson;
@@ -114,6 +115,58 @@ class DashboardController extends Controller
             'user_message'       => $this->serializeMessage($userMessage->fresh()),
             'assistant_message'  => $this->serializeMessage($assistantMessage->fresh()),
         ]);
+    }
+
+    /**
+     * POST /dashboard/chat/voice — transcribe an uploaded audio file.
+     * Body: multipart with 'audio' file field.
+     * Returns: { ok, text } so the client can put it in the draft.
+     */
+    public function chatVoice(Request $request, ?SpeechToTextProvider $stt = null): JsonResponse
+    {
+        if ($stt === null) {
+            return response()->json([
+                'ok' => false,
+                'message' => 'Voice transcription is not configured. Set TELEGRAM_VOICE_API_KEY in your .env.',
+            ], 503);
+        }
+
+        $request->validate([
+            'audio' => 'required|file|max:25600', // 25 MB
+        ]);
+
+        $upload = $request->file('audio');
+        if ($upload === null || !$upload->isValid()) {
+            return response()->json(['ok' => false, 'message' => 'Invalid audio upload'], 422);
+        }
+
+        $tmpDir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR);
+        $ext = strtolower($upload->getClientOriginalExtension() ?: 'webm');
+        $ext = preg_replace('/[^a-z0-9]+/', '', $ext) ?: 'webm';
+        $filename = 'dash-voice-' . bin2hex(random_bytes(6)) . '.' . $ext;
+        $tmpPath = $tmpDir . DIRECTORY_SEPARATOR . $filename;
+
+        try {
+            $upload->move($tmpDir, $filename);
+            $mime = $upload->getClientMimeType() ?: ('audio/' . $ext);
+            $text = $stt->transcribe($tmpPath, $mime);
+            $text = trim($text);
+
+            if ($text === '') {
+                return response()->json(['ok' => false, 'message' => 'Could not transcribe (empty result)'], 422);
+            }
+
+            return response()->json(['ok' => true, 'text' => $text]);
+        } catch (\Throwable $e) {
+            Log::error('dashboard.voice_failed', ['error' => $e->getMessage()]);
+
+            return response()->json([
+                'ok'      => false,
+                'message' => 'Transcription failed: ' . $e->getMessage(),
+            ], 500);
+        } finally {
+            if (is_file($tmpPath)) @unlink($tmpPath);
+        }
     }
 
     /**

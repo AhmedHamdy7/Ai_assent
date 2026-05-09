@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'telegram/webhook',
             'telegram/webhook/*',
             'dashboard/chat',
+            'dashboard/chat/*',
             'dashboard/sessions/*',
         ]);
     })

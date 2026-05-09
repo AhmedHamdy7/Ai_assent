@@ -21,6 +21,7 @@ Route::middleware(DashboardAccess::class)->group(function () {
         ->name('dashboard.session.messages');
     Route::post('/dashboard/sessions/new', [DashboardController::class, 'newSession'])->name('dashboard.session.new');
     Route::post('/dashboard/chat', [DashboardController::class, 'chatSend'])->name('dashboard.chat.send');
+    Route::post('/dashboard/chat/voice', [DashboardController::class, 'chatVoice'])->name('dashboard.chat.voice');
 });
 
 Route::get('/cron/reminders/{secret}', function (string $secret) {

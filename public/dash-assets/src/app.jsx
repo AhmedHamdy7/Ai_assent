@@ -122,3 +122,9 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+// Successful mount — kill the boot diagnostic timer.
+if (window.__BOOT_TIMER) {
+  clearTimeout(window.__BOOT_TIMER);
+  window.__BOOT_TIMER = null;
+}

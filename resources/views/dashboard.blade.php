@@ -172,9 +172,55 @@
 
 <div id="root" class="relative z-10"></div>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<!-- Diagnostic banner: shows clear error if React fails to mount within 6s -->
+<div id="boot-diag" style="display:none;position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:9999;max-width:92vw;background:rgba(255,122,138,0.10);border:1px solid rgba(255,122,138,0.4);color:#FF7A8A;padding:14px 18px;border-radius:12px;font-family:'Geist Mono',ui-monospace;font-size:12.5px;line-height:1.6;backdrop-filter:blur(20px);">
+  <div style="font-weight:600;letter-spacing:0.08em;text-transform:uppercase;font-size:11px;margin-bottom:6px;">Dashboard failed to load</div>
+  <div id="boot-diag-msg" style="color:rgba(255,255,255,0.85);"></div>
+</div>
+
+<script>
+  // Fail-loud: if React or Babel didn't load in 6s, show what's missing.
+  window.__BOOT_TIMER = setTimeout(function () {
+    var diag = document.getElementById('boot-diag');
+    var msg  = document.getElementById('boot-diag-msg');
+    if (!diag || !msg) return;
+    var problems = [];
+    if (typeof React === 'undefined') problems.push('React did not load (CDN blocked or slow)');
+    if (typeof ReactDOM === 'undefined') problems.push('ReactDOM did not load');
+    if (typeof Babel === 'undefined') problems.push('Babel did not load');
+    if (typeof tailwind === 'undefined') problems.push('Tailwind Play CDN did not load');
+    var root = document.getElementById('root');
+    if (problems.length === 0 && root && !root.firstChild) {
+      problems.push('Scripts loaded but React did not mount. Open DevTools console for the actual error.');
+    }
+    if (problems.length === 0) return; // all good
+    diag.style.display = 'block';
+    msg.innerHTML = problems.map(function (p) { return '• ' + p; }).join('<br>') +
+      '<br><br><span style="color:rgba(255,255,255,0.5)">Most common cause on production: <code>cdn.tailwindcss.com</code> rate-limit or <code>unpkg.com</code> blocked. Check Network tab in DevTools.</span>';
+  }, 6000);
+</script>
+
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script>
+  // CDN fallback: if unpkg failed, try jsdelivr.
+  (function () {
+    function load(src, cb) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.crossOrigin = 'anonymous';
+      s.onload = cb;
+      s.onerror = function () { console.error('Failed to load', src); cb && cb(false); };
+      document.head.appendChild(s);
+    }
+    var todo = [];
+    if (typeof React === 'undefined') todo.push('https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js');
+    if (typeof ReactDOM === 'undefined') todo.push('https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js');
+    if (typeof Babel === 'undefined') todo.push('https://cdn.jsdelivr.net/npm/@babel/standalone@7.29.0/babel.min.js');
+    todo.forEach(function (src) { load(src); });
+  })();
+</script>
 
 <script>
   (() => {
@@ -228,6 +274,7 @@
   window.__DASH_REFRESH_URL = "{{ url('/dashboard/data') }}";
   window.__DASH_SESSION_URL = "{{ url('/dashboard/sessions') }}";
   window.__DASH_CHAT_URL    = "{{ url('/dashboard/chat') }}";
+  window.__DASH_VOICE_URL   = "{{ url('/dashboard/chat/voice') }}";
   window.__DASH_NEW_SESSION_URL = "{{ url('/dashboard/sessions/new') }}";
 </script>
 

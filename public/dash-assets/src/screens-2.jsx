@@ -21,6 +21,13 @@ function TelegramConsole() {
   const [draft, setDraft] = useState("");
   const [showThreads, setShowThreads] = useState(false);
   const [error, setError] = useState(null);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [recordSecs, setRecordSecs] = useState(0);
+  const recorderRef = useRef(null);
+  const recorderChunksRef = useRef([]);
+  const recorderStreamRef = useRef(null);
+  const recordTimerRef = useRef(null);
 
   const liveTokens = useTicker(58, { step: 5, period: 600 });
   const sigs = useMemo(() => genWalk(48, 0.4, 7), []);
@@ -172,6 +179,115 @@ function TelegramConsole() {
     }
   };
 
+  const cleanupRecorder = () => {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    if (recorderStreamRef.current) {
+      recorderStreamRef.current.getTracks().forEach(t => t.stop());
+      recorderStreamRef.current = null;
+    }
+    recorderRef.current = null;
+    recorderChunksRef.current = [];
+  };
+
+  const startRecording = async () => {
+    setError(null);
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      setError('Voice recording is not supported in this browser.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorderStreamRef.current = stream;
+
+      const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+      const mimeType = mimeCandidates.find(m => window.MediaRecorder.isTypeSupported && window.MediaRecorder.isTypeSupported(m)) || '';
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      recorderChunksRef.current = [];
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) recorderChunksRef.current.push(ev.data);
+      };
+      recorder.onstop = async () => {
+        const chunks = recorderChunksRef.current;
+        const type = recorder.mimeType || 'audio/webm';
+        cleanupRecorder();
+        setRecording(false);
+        if (!chunks.length) return;
+
+        const blob = new Blob(chunks, { type });
+        const ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'mp4' : 'webm';
+        const file = new File([blob], `voice.${ext}`, { type });
+
+        await transcribeAndDraft(file);
+      };
+
+      recorder.start();
+      setRecording(true);
+      setRecordSecs(0);
+      recordTimerRef.current = setInterval(() => setRecordSecs(s => s + 1), 1000);
+    } catch (e) {
+      setError(e?.message?.includes('Permission') ? 'Microphone permission denied.' : 'Could not start recording: ' + (e.message || e));
+      cleanupRecorder();
+      setRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    const r = recorderRef.current;
+    if (r && r.state !== 'inactive') {
+      r.stop();
+    } else {
+      cleanupRecorder();
+      setRecording(false);
+    }
+  };
+
+  const cancelRecording = () => {
+    const r = recorderRef.current;
+    if (r) {
+      r.ondataavailable = null;
+      r.onstop = null;
+      try { r.stop(); } catch {}
+    }
+    cleanupRecorder();
+    setRecording(false);
+  };
+
+  const transcribeAndDraft = async (file) => {
+    setTranscribing(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('audio', file, file.name);
+      const res = await fetch(window.__DASH_VOICE_URL || '/dashboard/chat/voice', {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || `HTTP ${res.status}`);
+      // Append to existing draft instead of replacing — user can review and edit
+      setDraft(d => (d.trim() ? d.trim() + ' ' : '') + data.text);
+    } catch (e) {
+      setError('Transcription failed: ' + (e.message || e));
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  // Cleanup if user leaves the screen mid-recording
+  useEffect(() => () => cleanupRecorder(), []);
+
+  const fmtRec = (s) => {
+    const m = Math.floor(s / 60), r = s % 60;
+    return `${m}:${String(r).padStart(2, '0')}`;
+  };
+
   const messagesEnd = useRef(null);
   useEffect(() => {
     if (messagesEnd.current) messagesEnd.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -297,12 +413,25 @@ function TelegramConsole() {
                   <span className="text-cyan-glow">assistant is thinking</span>
                   <span className="text-cyan-glow tabular">{liveTokens.toFixed(0)} tok</span>
                 </>
+              ) : recording ? (
+                <>
+                  <LiveDot tone="danger"/>
+                  <span className="text-[#FF7A8A]">recording</span>
+                  <span className="text-[#FF7A8A] tabular">{fmtRec(recordSecs)}</span>
+                  <span className="text-white/30">·</span>
+                  <span className="text-white/55">click ◼ to stop · ✕ to cancel</span>
+                </>
+              ) : transcribing ? (
+                <>
+                  <LiveDot tone="cyan"/>
+                  <span className="text-cyan-glow">transcribing voice…</span>
+                </>
               ) : (
                 <>
                   <LiveDot tone="cyan"/>
                   <span className="text-white/55">compose</span>
                   <span className="text-white/30">·</span>
-                  <span className="text-white/55 truncate">⌘ ↵ to send</span>
+                  <span className="text-white/55 truncate">↵ send · ⇧ ↵ newline · 🎤 voice</span>
                 </>
               )}
             </div>
@@ -317,12 +446,43 @@ function TelegramConsole() {
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onComposerKey}
               rows={3}
-              disabled={sending}
+              disabled={sending || recording || transcribing}
               className="w-full text-[14px] resize-none placeholder:text-white/30 disabled:opacity-60"
-              placeholder={selectedId ? "Type a message — the AI will reply with the same tools as the Telegram bot…" : "Click 'New chat' or pick a session to start…"} />
+              placeholder={
+                recording ? "Recording… click ◼ to stop." :
+                transcribing ? "Transcribing audio…" :
+                selectedId ? "Type a message — the AI will reply with the same tools as the Telegram bot…" :
+                "Click 'New chat' or pick a session to start…"
+              } />
             <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
               <div className="flex items-center gap-2 flex-wrap"><Pill tone="cyan">/task</Pill><Pill>/expense</Pill><Pill>/learn</Pill><Pill>/web</Pill></div>
               <div className="flex items-center gap-2">
+                {!recording ? (
+                  <button
+                    onClick={startRecording}
+                    disabled={sending || transcribing}
+                    title="Record voice"
+                    className="h-9 w-9 grid place-items-center rounded-[10px] glass-strong border-white/15 hover:border-cyan-glow/40 transition disabled:opacity-50">
+                    <Icon.Mic/>
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={cancelRecording}
+                      title="Cancel recording"
+                      className="h-9 w-9 grid place-items-center rounded-[10px] border border-[#FF7A8A]/40 text-[#FF7A8A] hover:bg-[#FF7A8A]/[0.08] transition">
+                      <Icon.X/>
+                    </button>
+                    <button
+                      onClick={stopRecording}
+                      title="Stop and transcribe"
+                      className="h-9 px-3 rounded-[10px] flex items-center gap-2 bg-[#FF7A8A]/[0.10] border border-[#FF7A8A]/40 text-[#FF7A8A] pulse-cyan transition"
+                      style={{ animationName: 'pulseRing' }}>
+                      <Icon.Stop/>
+                      <span className="text-[12.5px] tabular">{fmtRec(recordSecs)}</span>
+                    </button>
+                  </>
+                )}
                 <Btn icon={<Icon.X/>} onClick={() => setDraft("")}>Clear</Btn>
                 <Btn tone="primary" icon={<Icon.Send/>} onClick={send}>{sending ? 'Sending…' : 'Send'}</Btn>
               </div>
